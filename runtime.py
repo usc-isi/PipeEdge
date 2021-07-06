@@ -2,11 +2,13 @@ import os
 import sys
 import gc
 import threading
+import requests
 import time
 import torch
 from functools import wraps
 from typing import Optional
 import numpy as np
+from PIL import Image
 from torch import Tensor
 import torch.nn as nn
 import torch.distributed.autograd as dist_autograd
@@ -40,13 +42,16 @@ class TransformerBase(nn.Module):
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
         # print(f"Model Config: {self.config}")
+        print(f">>>> Model name {model_name}")
         self.is_first = is_first
         self.is_last = is_last
         self.start_layer = start_layer
         self.end_layer = end_layer
         self.load_weight = load_weight
+        self.model = self._make_layer()
     
     def _make_layer(self):
+        build_layers = []
         ## first Shard
         if self.is_first:
             self.embeddings = ViTEmbeddings(self.config)
@@ -64,6 +69,17 @@ class TransformerBase(nn.Module):
             print(f">>>> Finish loading weights")
         else:
             print(f">>>> Do NOT load weights")
+
+        ## build the model shard
+        if self.is_first:
+            build_layers.append(self.embeddings)
+        for i, layer in enumerate(self.layers):
+            build_layers.append(layer)
+        if self.is_last:
+            build_layers.append(self.layernorm)
+            build_layers.append(self.classifier)
+        return nn.Sequential(*build_layers)
+
     
     def load_weights(self):
         if self.model_name == 'google/vit-base-patch16-224':
@@ -74,28 +90,30 @@ class TransformerBase(nn.Module):
         print(f">>>> Load weight file f{weights_file_name}")
 
         if self.is_first:
-            # self.embeddings.patch_embeddings.projection.weight.copy_(torch.from_numpy(weights["embedding/kernel"], conv=True))
-            conv_weight = weights["embedding/kernel"]
-            O, I, J, K = conv_weight.shape
-            conv_weight = conv_weight.reshape(K,J,I,O)
-            print(f"model weight shape is {self.embeddings.patch_embeddings.projection.weight.shape}, kernel shape is {conv_weight.shape}")
-            # embed_conv_w = self.adapt_input_conv(self.embeddings.patch_embeddings.projection.weight.shape[1], torch.from_numpy(weights["embedding/kernel"]))
-            self.embeddings.patch_embeddings.projection.weight.copy_(torch.from_numpy(conv_weight))
-            self.embeddings.patch_embeddings.projection.bias.copy_(torch.from_numpy(weights["embedding/bias"]))
-            print(f">>>> Load embedding for the first shard")
+            with torch.no_grad():
+                self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["Transformer/posembed_input/pos_embedding"])))
+                conv_weight = weights["embedding/kernel"]
+                O, I, J, K = conv_weight.shape
+                print(f"conv_shape is {O, I, J, K}, pe weight shape is {self.embeddings.patch_embeddings.projection.weight.shape}")
+                # conv_weight = conv_weight.reshape(K,J,O,I)
+                conv_weight = conv_weight.transpose([3, 2, 0, 1])
+                self.embeddings.patch_embeddings.projection.weight.copy_(torch.from_numpy(conv_weight))
+                self.embeddings.patch_embeddings.projection.bias.copy_(torch.from_numpy(weights["embedding/bias"]))
+                print(f">>>> Load embedding for the first shard")
 
         for i, layer in enumerate(self.layers):
             layer = self.load_layer_weights(weights, i, layer)
             print(f">>>> Load {i}-th transformer layer")
             
         if self.is_last:
-            self.layernorm.weight.copy_(torch.from_numpy(weights["Transformer/encoder_norm/scale"]))
-            self.layernorm.bias.copy_(torch.from_numpy(weights["Transformer/encoder_norm/bias"]))
-            head_kernel = np.transpose(weights["head/kernel"])  
-            # print(f"classifier weight is {self.classifier.weight.shape}, head kernel weight shape is {head_kernel.shape}")
-            self.classifier.weight.copy_(torch.from_numpy(head_kernel))
-            self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))  
-            print(f">>>> Load Layernorm, classifier for the last shard")  
+            with torch.no_grad():
+                self.layernorm.weight.copy_(torch.from_numpy(weights["Transformer/encoder_norm/scale"]))
+                self.layernorm.bias.copy_(torch.from_numpy(weights["Transformer/encoder_norm/bias"]))
+                head_kernel = np.transpose(weights["head/kernel"])  
+                # print(f"classifier weight is {self.classifier.weight.shape}, head kernel weight shape is {head_kernel.shape}")
+                self.classifier.weight.copy_(torch.from_numpy(head_kernel))
+                self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))  
+                print(f">>>> Load Layernorm, classifier for the last shard")  
 
     def load_layer_weights(self, weights, id, transformer_layer):
         ROOT = f"Transformer/encoderblock_{id}"
@@ -145,30 +163,14 @@ class TransformerBase(nn.Module):
             transformer_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
             transformer_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
         return transformer_layer
-    
-    def adapt_input_conv(self, in_chans, conv_weight):
-        conv_type = conv_weight.dtype
-        conv_weight = conv_weight.float()  # Some weights are in torch.half, ensure it's float for sum on CPU
-        O, I, J, K = conv_weight.shape
-        if in_chans == 1:
-            if I > 3:
-                assert conv_weight.shape[1] % 3 == 0
-                # For models with space2depth stems
-                conv_weight = conv_weight.reshape(O, I // 3, 3, J, K)
-                conv_weight = conv_weight.sum(dim=2, keepdim=False)
-            else:
-                conv_weight = conv_weight.sum(dim=1, keepdim=True)
-        elif in_chans != 3:
-            if I != 3:
-                raise NotImplementedError('Weight format not supported by conversion.')
-            else:
-                # NOTE this strategy should be better than random init, but there could be other combinations of
-                # the original RGB input layer weights that'd work better for specific cases.
-                repeat = int(math.ceil(in_chans / 3))
-                conv_weight = conv_weight.repeat(1, repeat, 1, 1)[:, :in_chans, :, :]
-                conv_weight *= (3 / float(in_chans))
-        conv_weight = conv_weight.to(conv_type)
-        return conv_weight
+
+    def forward(self, x):
+        x = self.embeddings(x)
+        for i, layer in enumerate(self.layers):
+            x = layer(x)[0]
+        x = self.layernorm(x)
+        x = self.classifier(x[:, 0, :])
+        return x
 
     def parameter_rrefs(self):
         return [RRef(p) for p in self.parameters()]
@@ -182,5 +184,15 @@ if __name__=="__main__":
     start_layer = 0
     end_layer = 12
     load_weight = True
-    Test1 = TransformerBase(model_name, is_first, is_last, start_layer, end_layer, load_weight)
-    Test1._make_layer()
+    model = TransformerBase(model_name, is_first, is_last, start_layer, end_layer, load_weight)
+    print(model)
+    url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
+    image = Image.open(requests.get(url, stream=True).raw)
+
+    feature_extractor = ViTFeatureExtractor.from_pretrained('google/vit-base-patch16-224')
+    inputs = feature_extractor(images=image, return_tensors="pt")
+    outputs = model(inputs['pixel_values'])
+    # logits = outputs.logits
+    # model predicts one of the 1000 ImageNet classes
+    predicted_class_idx = outputs .argmax(-1).item()
+    print("Predicted class:", model.config.id2label[predicted_class_idx])
