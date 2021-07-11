@@ -328,8 +328,8 @@ def run_worker(rank, world_size, num_split):
 
     os.environ['MASTER_ADDR'] = '127.0.0.1' #'10.52.3.142'
     os.environ['MASTER_PORT'] = '29501'
-    # os.environ["TP_SOCKET_IFNAME"] = "eno1"
-    # os.environ["GLOO_SOCKET_IFNAME"] = 'eno1'
+    os.environ["TP_SOCKET_IFNAME"] = "eno1"
+    os.environ["GLOO_SOCKET_IFNAME"] = 'eno1'
 
     # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
     options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=128,rpc_timeout=3000)
