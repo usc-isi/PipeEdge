@@ -26,9 +26,9 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer
 #########################################################
 
 device = torch.device('cpu')
-parallel_threads = 2
-torch.set_num_threads(parallel_threads)
-torch.set_num_interop_threads(parallel_threads)
+# parallel_threads = 2
+# torch.set_num_threads(parallel_threads)
+# torch.set_num_interop_threads(parallel_threads)
 torch.set_grad_enabled(False)
 print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
 
@@ -57,7 +57,7 @@ class TransformerBase(nn.Module):
             self.embeddings = ViTEmbeddings(self.config)
 
         ## [start_layer, end_layer)
-        self.layers = nn.ModuleList([ViTLayer(self.config) for i in range(start_layer, end_layer)])
+        self.layers = nn.ModuleList([ViTLayer(self.config) for i in range(self.start_layer, self.end_layer)])
 
         ## last Shard
         if self.is_last:
@@ -94,7 +94,7 @@ class TransformerBase(nn.Module):
                 self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["Transformer/posembed_input/pos_embedding"])))
                 conv_weight = weights["embedding/kernel"]
                 O, I, J, K = conv_weight.shape
-                print(f"conv_shape is {O, I, J, K}, pe weight shape is {self.embeddings.patch_embeddings.projection.weight.shape}")
+                # print(f"conv_shape is {O, I, J, K}, pe weight shape is {self.embeddings.patch_embeddings.projection.weight.shape}")
                 # conv_weight = conv_weight.reshape(K,J,O,I)
                 conv_weight = conv_weight.transpose([3, 2, 0, 1])
                 self.embeddings.patch_embeddings.projection.weight.copy_(torch.from_numpy(conv_weight))
@@ -103,7 +103,7 @@ class TransformerBase(nn.Module):
 
         for i, layer in enumerate(self.layers):
             layer = self.load_layer_weights(weights, i, layer)
-            print(f">>>> Load {i}-th transformer layer")
+            print(f">>>> Load {self.start_layer+i}-th transformer layer")
             
         if self.is_last:
             with torch.no_grad():
@@ -165,34 +165,226 @@ class TransformerBase(nn.Module):
         return transformer_layer
 
     def forward(self, x):
-        x = self.embeddings(x)
-        for i, layer in enumerate(self.layers):
-            x = layer(x)[0]
-        x = self.layernorm(x)
-        x = self.classifier(x[:, 0, :])
+        x = x.to_here()
+        with torch.no_grad():
+            if self.is_first:
+                x = self.embeddings(x)
+            for i, layer in enumerate(self.layers):
+                x = layer(x)[0]
+            if self.is_last:
+                x = self.layernorm(x)
+                x = self.classifier(x[:, 0, :])
+        print(f"Finish 1 microbatch")
         return x
 
     def parameter_rrefs(self):
         return [RRef(p) for p in self.parameters()]
 
 
+#########################################################
+#                Build Transformer Shard                #
+#########################################################
+
+class TransformerShard1(TransformerBase):
+    def __init__(self, device, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
+        super(TransformerShard1, self).__init__(model_name, is_first, is_last, start_layer, end_layer, load_weight=True)
+        print("======= Build TransformerShard1 ==========")
+        self._lock = threading.Lock()
+        self.device = device
+        self.total_time = 0
+        self.total_batch = 0
+
+    @torch.no_grad()
+    def forward(self, x):
+        x = x.to_here().to(self.device)
+        
+        with self._lock:
+            start = time.time()
+            x = self.embeddings(x)
+            for i, layer in enumerate(self.layers):
+                x = layer(x)[0]
+            end = time.time()
+        self.total_time  += (end - start)
+        self.total_batch += 1
+        print(f"Shard1 finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
+        return x
+
+
+class TransformerShard2(TransformerBase):
+    def __init__(self, device, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
+        super(TransformerShard2, self).__init__(model_name, is_first, is_last, start_layer, end_layer, load_weight=True)
+        print("======= Build TransformerShard2 ==========")
+        self._lock = threading.Lock()
+        self.device = device
+        self.total_time = 0
+        self.total_batch = 0
+
+    @torch.no_grad()
+    def forward(self, x):
+        x = x.to_here().to(self.device)
+        
+        with self._lock:
+            start = time.time()
+            for i, layer in enumerate(self.layers):
+                x = layer(x)[0]
+            x = self.layernorm(x)
+            x = self.classifier(x[:, 0, :])
+            end = time.time()
+        self.total_time +=  (end - start)
+        self.total_batch += 1
+        print(f"Shard2 finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
+        return x
+
+
+
+#########################################################
+#             Stitch Shards into one Module             #
+#########################################################
+class DistTransformer(nn.Module):
+    def __init__(self, model_name, num_split, workers, *args, **kwargs):
+        super(DistTransformer, self).__init__()
+        self.num_split = num_split
+        self.p1_rref = rpc.remote(
+            workers[0],
+            TransformerShard1,
+            args = ("cpu", model_name, True, False, 0, 6, True) + args,
+            kwargs = kwargs
+        )
+
+        self.p2_rref = rpc.remote(
+            workers[1],
+            TransformerShard2,
+            args = ("cpu", model_name, False, True, 6, 12, True) + args,
+            kwargs = kwargs
+        )
+
+    def forward(self, xs):
+        out_futures = []
+        for x in iter(xs.split(self.num_split, dim=0)):
+            x_rref = RRef(x)
+            y_rref = self.p1_rref.remote().forward(x_rref)
+            z_fut = self.p2_rref.rpc_async().forward(y_rref)
+            out_futures.append(z_fut)
+
+        return torch.cat(torch.futures.wait_all(out_futures))
+    def parameter_rrefs(self):
+        remote_params = []
+        remote_params.extend(self.p1_rref.remote().parameter_rrefs().to_here())
+        remote_params.extend(self.p2_rref.remote().parameter_rrefs().to_here())
+        return remote_params
+
+
+#########################################################
+#                   Run RPC Processes                   #
+#########################################################
+
+# 'google/vit-base-patch16-224'
+# 'google/vit-huge-patch14-224-in21k'
+model_name= 'google/vit-base-patch16-224'
+num_batches = 1
+batch_size = 256
+
+img = torch.randn(3, 384, 384)
+imgs = [img for i in range(batch_size)]
+
+latencies = []
+throughputs = []
+
+feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
+
+def run_master(split_size):
+    # put the two model parts on worker1 and worker2 respectively
+    print("Run mastering \n")
+    for si in range(len(split_size)):
+        # print(f"Start Calcluate split size {split_size[si]}")
+        model =  DistTransformer(model_name, split_size[si], ["worker0", "worker1"])
+        inputs = feature_extractor(images=imgs, return_tensors="pt")
+        tik = time.time()
+        for i in range(num_batches):
+            # generate random inputs and labels       
+            outputs = model(inputs['pixel_values'])
+        ## Calculate time
+        tok = time.time()
+        latency = tok-tik
+        throughput = num_batches*batch_size / latency
+        # print(f"Split size is {split_size[si]}, Total program execution time = {tok - tik}")
+        latencies.append(latency)
+        throughputs.append(throughput)
+         
+    best_choice = -1
+    best_throughput  = -1
+    for i in range(len(split_size)):
+        print(f"Split size {split_size[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
+        if throughputs[i] > best_throughput:
+            best_throughput = throughputs[i]
+            best_choice = i 
+    print("---------------- Split output line ----------------")
+    print(f"\nBest split size is {split_size[best_choice]}, latency is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
+    
+   
+
+
+def run_worker(rank, world_size, num_split):
+
+    os.environ['MASTER_ADDR'] = '127.0.0.1' #'10.52.3.142'
+    os.environ['MASTER_PORT'] = '29501'
+    # os.environ["TP_SOCKET_IFNAME"] = "eno1"
+    # os.environ["GLOO_SOCKET_IFNAME"] = 'eno1'
+
+    # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
+    options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=128,rpc_timeout=3000)
+
+
+    if rank == 0:
+        rpc.init_rpc(
+            "worker0",
+            rank=rank,
+   #         backend=rpc.BackendType.PROCESS_GROUP,
+            world_size=world_size,
+            rpc_backend_options=options
+        )
+        run_master(num_split)
+    else:
+        rpc.init_rpc(
+            "worker1",
+            rank=rank,
+   #         backend=rpc.BackendType.PROCESS_GROUP,
+            world_size=world_size,
+            rpc_backend_options=options
+        )
+        pass
+
+    # block until all rpcs finisha
+    rpc.shutdown()
 
 if __name__=="__main__":
-    model_name = "google/vit-base-patch16-224"
-    is_first = True
-    is_last = True
-    start_layer = 0
-    end_layer = 12
-    load_weight = True
-    model = TransformerBase(model_name, is_first, is_last, start_layer, end_layer, load_weight)
-    print(model)
-    url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
-    image = Image.open(requests.get(url, stream=True).raw)
+    world_size = 2
+    rank=int(sys.argv[1])
+    num_split=[8]
 
-    feature_extractor = ViTFeatureExtractor.from_pretrained('google/vit-base-patch16-224')
-    inputs = feature_extractor(images=image, return_tensors="pt")
-    outputs = model(inputs['pixel_values'])
-    # logits = outputs.logits
-    # model predicts one of the 1000 ImageNet classes
-    predicted_class_idx = outputs .argmax(-1).item()
-    print("Predicted class:", model.config.id2label[predicted_class_idx])
+    print(f"{model_name}, {batch_size}, {num_split}")
+    
+    tik = time.time()
+    run_worker(rank, world_size, num_split)
+    tok = time.time()
+    print(f"Total program execution time = {tok - tik}")
+
+    ##【TODO】 Put in unit test
+    # model_name = "google/vit-base-patch16-224"
+    # is_first = True
+    # is_last = True
+    # start_layer = 0
+    # end_layer = 12
+    # load_weight = True
+    # model = TransformerShard1('cpu', model_name, is_first, is_last, start_layer, end_layer, load_weight)
+    # # print(model)
+    # url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
+    # image = Image.open(requests.get(url, stream=True).raw)
+
+    # feature_extractor = ViTFeatureExtractor.from_pretrained('google/vit-base-patch16-224')
+    # inputs = feature_extractor(images=image, return_tensors="pt")
+    # outputs = model(inputs['pixel_values'])
+    # # logits = outputs.logits
+    # # model predicts one of the 1000 ImageNet classes
+    # predicted_class_idx = outputs .argmax(-1).item()
+    # print("Predicted class:", model.config.id2label[predicted_class_idx])
