@@ -9,8 +9,9 @@
 ## Usage
 
 1. Change the world_size, total_rank in runtime.py
-2. Activate pytorch enviroment
-3. In node with Rank i, use command:
+2. Change the MASTER_ADDR, MASTER_PORT, TP_SOCKET_IFNAME, GLOO_SOCKET_IFNAME in runtime.py 
+3. Activate pytorch enviroment
+4. In node with Rank i, use command:
 
 ```sh
 python runtime.py i
