@@ -1,15 +1,5 @@
 # EdgePipe
 
-## TODO
-
-- [x] Remove unneccessary code
-- [x] Build layers in the node and reload the weight 
-- [x] Combine the function for different number of nodes
-- [x] Test for correctness
-- [ ] Test for multiple nodes 
-- [ ] Test for vit-large model
-- [ ] Test for vit-huge model
-- [ ] Solve the memory leak problem
 
 ## Usage
 
@@ -27,5 +17,17 @@ eg. in rank 0:
 ```sh
 python runtime.py 0
 ```
+
+
+## TODO
+
+- [x] Remove unneccessary code
+- [x] Build layers in the node and reload the weight 
+- [x] Combine the function for different number of nodes
+- [x] Test for correctness
+- [ ] Test for multiple nodes 
+- [ ] Test for vit-large model
+- [ ] Test for vit-huge model
+- [ ] Solve the memory leak problem
 
 
