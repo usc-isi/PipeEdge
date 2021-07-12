@@ -37,18 +37,23 @@ print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_th
 #           Define Model Parallel Transformer           #
 #########################################################
 class TransformerBase(nn.Module):
-    def __init__(self, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
+    def __init__(self, rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
         super(TransformerBase, self).__init__()
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
         # print(f"Model Config: {self.config}")
         print(f">>>> Model name {model_name}")
+        self.rank = rank
         self.is_first = is_first
         self.is_last = is_last
         self.start_layer = start_layer
         self.end_layer = end_layer
         self.load_weight = load_weight
+        self._lock = threading.Lock()
+        self.total_time = 0
+        self.total_batch = 0
         self.model = self._make_layer()
+        print(f"======= Build TransformerShard{self.rank} ==========")
     
     def _make_layer(self):
         build_layers = []
@@ -164,9 +169,11 @@ class TransformerBase(nn.Module):
             transformer_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
         return transformer_layer
 
+    @torch.no_grad()
     def forward(self, x):
         x = x.to_here()
-        with torch.no_grad():
+        with self._lock:
+            start = time.time()
             if self.is_first:
                 x = self.embeddings(x)
             for i, layer in enumerate(self.layers):
@@ -174,7 +181,10 @@ class TransformerBase(nn.Module):
             if self.is_last:
                 x = self.layernorm(x)
                 x = self.classifier(x[:, 0, :])
-        print(f"Finish 1 microbatch")
+            end = time.time()
+        self.total_time +=  (end - start)
+        self.total_batch += 1
+        print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         return x
 
     def parameter_rrefs(self):
@@ -187,53 +197,14 @@ class TransformerBase(nn.Module):
 
 class TransformerShard1(TransformerBase):
     def __init__(self, device, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
-        super(TransformerShard1, self).__init__(model_name, is_first, is_last, start_layer, end_layer, load_weight=True)
-        print("======= Build TransformerShard1 ==========")
-        self._lock = threading.Lock()
-        self.device = device
-        self.total_time = 0
-        self.total_batch = 0
-
-    @torch.no_grad()
-    def forward(self, x):
-        x = x.to_here().to(self.device)
-        
-        with self._lock:
-            start = time.time()
-            x = self.embeddings(x)
-            for i, layer in enumerate(self.layers):
-                x = layer(x)[0]
-            end = time.time()
-        self.total_time  += (end - start)
-        self.total_batch += 1
-        print(f"Shard1 finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
-        return x
+        super(TransformerShard1, self).__init__(0, model_name, is_first, is_last, start_layer, end_layer, load_weight=True)
 
 
 class TransformerShard2(TransformerBase):
     def __init__(self, device, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
-        super(TransformerShard2, self).__init__(model_name, is_first, is_last, start_layer, end_layer, load_weight=True)
-        print("======= Build TransformerShard2 ==========")
-        self._lock = threading.Lock()
-        self.device = device
-        self.total_time = 0
-        self.total_batch = 0
+        super(TransformerShard2, self).__init__(1, model_name, is_first, is_last, start_layer, end_layer, load_weight=True)
 
-    @torch.no_grad()
-    def forward(self, x):
-        x = x.to_here().to(self.device)
-        
-        with self._lock:
-            start = time.time()
-            for i, layer in enumerate(self.layers):
-                x = layer(x)[0]
-            x = self.layernorm(x)
-            x = self.classifier(x[:, 0, :])
-            end = time.time()
-        self.total_time +=  (end - start)
-        self.total_batch += 1
-        print(f"Shard2 finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
-        return x
+
 
 
 
@@ -328,8 +299,8 @@ def run_worker(rank, world_size, num_split):
 
     os.environ['MASTER_ADDR'] = '127.0.0.1' #'10.52.3.142'
     os.environ['MASTER_PORT'] = '29501'
-    os.environ["TP_SOCKET_IFNAME"] = "eno1"
-    os.environ["GLOO_SOCKET_IFNAME"] = 'eno1'
+    os.environ["TP_SOCKET_IFNAME"] = "lo0"
+    os.environ["GLOO_SOCKET_IFNAME"] = 'lo0'
 
     # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
     options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=128,rpc_timeout=3000)
