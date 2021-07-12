@@ -3,7 +3,9 @@
 ## TODO
 
 - [x] Combine the function for different number of nodes
-
+- [ ] Test for multiple nodes 
+- [ ] Test for vit-large model
+- [ ] Test for vit-huge model
 - [ ] Solve the memory leak problem
 
 ## Usage
