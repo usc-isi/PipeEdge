@@ -25,6 +25,7 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer
 #                 Check Enviroment Settings             #
 #########################################################
 
+## Force pytorch use CPU
 device = torch.device('cpu')
 # parallel_threads = 2
 # torch.set_num_threads(parallel_threads)
@@ -107,7 +108,7 @@ class TransformerBase(nn.Module):
                 print(f">>>> Load embedding for the first shard")
 
         for i, layer in enumerate(self.layers):
-            layer = self.load_layer_weights(weights, i, layer)
+            layer = self.load_layer_weights(weights, self.start_layer+i, layer)
             print(f">>>> Load {self.start_layer+i}-th transformer layer")
             
         if self.is_last:
@@ -195,17 +196,32 @@ class TransformerBase(nn.Module):
 #                Build Transformer Shard                #
 #########################################################
 
-class TransformerShard1(TransformerBase):
-    def __init__(self, device, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
-        super(TransformerShard1, self).__init__(0, model_name, is_first, is_last, start_layer, end_layer, load_weight=True)
+## Class factory
+def _create_transformershard(class_name, rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
+    class TransformerShardCls(TransformerBase):
+        def __init__(self):
+            super(TransformerShardCls, self).__init__(rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True)
+    TransformerShardCls.__qualname__ = class_name
+    return TransformerShardCls
 
+# *****  Define the World Size and partition Method ******#
+total_rank = 2 
+partition = [0, 6, 6, 12]   
+# ***********************  End  **************************#
 
-class TransformerShard2(TransformerBase):
-    def __init__(self, device, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
-        super(TransformerShard2, self).__init__(1, model_name, is_first, is_last, start_layer, end_layer, load_weight=True)
+_shard_class = [f'TransformerShard{i+1}' for i in range(total_rank)]
 
-
-
+rank = 0
+shard_class_list = []
+for _name in _shard_class:
+    if rank == 0:
+        globals()[_name] = _create_transformershard(_name, rank, 'google/vit-base-patch16-224', True, False, partition[2*rank], partition[2*rank+1], True )
+    elif rank == total_rank-1:
+        globals()[_name] = _create_transformershard(_name, rank, 'google/vit-base-patch16-224', False, True, partition[2*rank], partition[2*rank+1], True )
+    else:
+        globals()[_name] = _create_transformershard(_name, rank, 'google/vit-base-patch16-224', False, False, partition[2*rank], partition[2*rank+1], True )
+    shard_class_list.append(eval(_name))
+    rank += 1
 
 
 #########################################################
@@ -215,34 +231,24 @@ class DistTransformer(nn.Module):
     def __init__(self, model_name, num_split, workers, *args, **kwargs):
         super(DistTransformer, self).__init__()
         self.num_split = num_split
-        self.p1_rref = rpc.remote(
-            workers[0],
-            TransformerShard1,
-            args = ("cpu", model_name, True, False, 0, 6, True) + args,
-            kwargs = kwargs
-        )
-
-        self.p2_rref = rpc.remote(
-            workers[1],
-            TransformerShard2,
-            args = ("cpu", model_name, False, True, 6, 12, True) + args,
-            kwargs = kwargs
-        )
+        self.rref_list = []
+        for i in range(total_rank):
+            exec(f"self.p{i+1}_rref= rpc.remote(workers[{i}],shard_class_list[{i}])")
+            self.rref_list.append(eval(f"self.p{i+1}_rref"))
 
     def forward(self, xs):
         out_futures = []
         for x in iter(xs.split(self.num_split, dim=0)):
             x_rref = RRef(x)
-            y_rref = self.p1_rref.remote().forward(x_rref)
-            z_fut = self.p2_rref.rpc_async().forward(y_rref)
-            out_futures.append(z_fut)
+            for i in range(total_rank):
+                if i == 0:
+                    x_rref = self.rref_list[i].remote().forward(x_rref)
+                else:
+                    x_rref = self.rref_list[i].rpc_async().forward(x_rref)
+            out_futures.append(x_rref)
 
         return torch.cat(torch.futures.wait_all(out_futures))
-    def parameter_rrefs(self):
-        remote_params = []
-        remote_params.extend(self.p1_rref.remote().parameter_rrefs().to_here())
-        remote_params.extend(self.p2_rref.remote().parameter_rrefs().to_here())
-        return remote_params
+
 
 
 #########################################################
@@ -250,13 +256,21 @@ class DistTransformer(nn.Module):
 #########################################################
 
 # 'google/vit-base-patch16-224'
+# 'google/vit-large-patch16-224'
 # 'google/vit-huge-patch14-224-in21k'
 model_name= 'google/vit-base-patch16-224'
 num_batches = 1
-batch_size = 256
+batch_size = 16
 
-img = torch.randn(3, 384, 384)
-imgs = [img for i in range(batch_size)]
+## random data
+# img = torch.randn(3, 384, 384)
+
+## ground truth: Egyptian cat
+url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
+image = Image.open(requests.get(url, stream=True).raw)
+imgs = [image for i in range(batch_size)]
+
+
 
 latencies = []
 throughputs = []
@@ -269,11 +283,16 @@ def run_master(split_size):
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
         model =  DistTransformer(model_name, split_size[si], ["worker0", "worker1"])
+        ## for verification 
+        origin_model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224')
         inputs = feature_extractor(images=imgs, return_tensors="pt")
         tik = time.time()
         for i in range(num_batches):
             # generate random inputs and labels       
             outputs = model(inputs['pixel_values'])
+            print(outputs.shape)
+            predicted_class_idx = outputs[0].argmax(-1).item()
+            print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
         ## Calculate time
         tok = time.time()
         latency = tok-tik
@@ -289,7 +308,7 @@ def run_master(split_size):
         if throughputs[i] > best_throughput:
             best_throughput = throughputs[i]
             best_choice = i 
-    print("---------------- Split output line ----------------")
+    print("\n---------------- Split output line ----------------")
     print(f"\nBest split size is {split_size[best_choice]}, latency is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
     
    
@@ -317,7 +336,7 @@ def run_worker(rank, world_size, num_split):
         run_master(num_split)
     else:
         rpc.init_rpc(
-            "worker1",
+            f"worker{rank}",
             rank=rank,
    #         backend=rpc.BackendType.PROCESS_GROUP,
             world_size=world_size,
