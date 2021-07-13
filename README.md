@@ -25,9 +25,9 @@ python runtime.py 0
 - [x] Build layers in the node and reload the weight 
 - [x] Combine the function for different number of nodes
 - [x] Test for correctness
-- [ ] Test for multiple nodes 
-- [ ] Test for vit-large model
-- [ ] Test for vit-huge model
+- [x] Test for multiple nodes 
+- [x] Test for vit-large model
+- [x] Test for vit-huge model
 - [ ] Solve the memory leak problem
 
 
