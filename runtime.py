@@ -67,8 +67,11 @@ class TransformerBase(nn.Module):
 
         ## last Shard
         if self.is_last:
+            num_label = self.config.num_labels
             self.layernorm = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
-            self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels) if self.config.num_labels > 0 else nn.Identity()
+            if self.model_name == 'google/vit-huge-patch14-224-in21k':
+                num_label = 21843
+            self.classifier = nn.Linear(self.config.hidden_size, num_label) if self.config.num_labels > 0 else nn.Identity()
 
         if self.load_weight == True:
             self.load_weights()
@@ -92,6 +95,8 @@ class TransformerBase(nn.Module):
             weights_file_name = 'imagenet21k+imagenet2012_ViT-B_16-224.npz'
         elif self.model_name == 'google/vit-large-patch16-224':
             weights_file_name = 'imagenet21k+imagenet2012_ViT-L_16-224.npz'
+        elif self.model_name == 'google/vit-huge-patch14-224-in21k':
+            weights_file_name = 'ViT-H_14.npz'
         weights = np.load(weights_file_name)
         print(f">>>> Load weight file f{weights_file_name}")
 
@@ -205,8 +210,21 @@ def _create_transformershard(class_name, rank, model_name, is_first, is_last, st
     return TransformerShardCls
 
 # *****  Define the World Size and partition Method ******#
-total_rank = 2 
-partition = [0, 6, 6, 12]   
+# 'google/vit-base-patch16-224'
+# 'google/vit-large-patch16-224'
+# 'google/vit-huge-patch14-224-in21k'
+model_name= 'google/vit-huge-patch14-224-in21k'
+total_rank = 4 
+partition = [0,8,  8, 16, 16,24,  24,32]  
+num_batches = 1
+batch_size = 128
+
+## random data
+# img = torch.randn(3, 384, 384)
+## ground truth: Egyptian cat
+url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
+image = Image.open(requests.get(url, stream=True).raw)
+imgs = [image for i in range(batch_size)]
 # ***********************  End  **************************#
 
 _shard_class = [f'TransformerShard{i+1}' for i in range(total_rank)]
@@ -215,11 +233,11 @@ rank = 0
 shard_class_list = []
 for _name in _shard_class:
     if rank == 0:
-        globals()[_name] = _create_transformershard(_name, rank, 'google/vit-base-patch16-224', True, False, partition[2*rank], partition[2*rank+1], True )
+        globals()[_name] = _create_transformershard(_name, rank, model_name, True, False, partition[2*rank], partition[2*rank+1], True )
     elif rank == total_rank-1:
-        globals()[_name] = _create_transformershard(_name, rank, 'google/vit-base-patch16-224', False, True, partition[2*rank], partition[2*rank+1], True )
+        globals()[_name] = _create_transformershard(_name, rank, model_name, False, True, partition[2*rank], partition[2*rank+1], True )
     else:
-        globals()[_name] = _create_transformershard(_name, rank, 'google/vit-base-patch16-224', False, False, partition[2*rank], partition[2*rank+1], True )
+        globals()[_name] = _create_transformershard(_name, rank, model_name, False, False, partition[2*rank], partition[2*rank+1], True )
     shard_class_list.append(eval(_name))
     rank += 1
 
@@ -243,8 +261,11 @@ class DistTransformer(nn.Module):
             for i in range(total_rank):
                 if i == 0:
                     x_rref = self.rref_list[i].remote().forward(x_rref)
-                else:
+                elif i == total_rank-1:
                     x_rref = self.rref_list[i].rpc_async().forward(x_rref)
+                else:
+                    x_rref = self.rref_list[i].remote().forward(x_rref)
+
             out_futures.append(x_rref)
 
         return torch.cat(torch.futures.wait_all(out_futures))
@@ -254,23 +275,6 @@ class DistTransformer(nn.Module):
 #########################################################
 #                   Run RPC Processes                   #
 #########################################################
-
-# 'google/vit-base-patch16-224'
-# 'google/vit-large-patch16-224'
-# 'google/vit-huge-patch14-224-in21k'
-model_name= 'google/vit-base-patch16-224'
-num_batches = 1
-batch_size = 16
-
-## random data
-# img = torch.randn(3, 384, 384)
-
-## ground truth: Egyptian cat
-url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
-image = Image.open(requests.get(url, stream=True).raw)
-imgs = [image for i in range(batch_size)]
-
-
 
 latencies = []
 throughputs = []
@@ -282,17 +286,18 @@ def run_master(split_size):
     print("Run mastering \n")
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
-        model =  DistTransformer(model_name, split_size[si], ["worker0", "worker1"])
+        work_list = [f"worker{i}" for i in range(total_rank)]
+        model =  DistTransformer(model_name, split_size[si], work_list)
         ## for verification 
-        origin_model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224')
+        # origin_model = ViTForImageClassification.from_pretrained(model_name)
         inputs = feature_extractor(images=imgs, return_tensors="pt")
         tik = time.time()
         for i in range(num_batches):
             # generate random inputs and labels       
             outputs = model(inputs['pixel_values'])
-            print(outputs.shape)
-            predicted_class_idx = outputs[0].argmax(-1).item()
-            print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
+            # print(outputs.shape)
+            # predicted_class_idx = outputs[0].argmax(-1).item()
+            # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
         ## Calculate time
         tok = time.time()
         latency = tok-tik
@@ -309,17 +314,17 @@ def run_master(split_size):
             best_throughput = throughputs[i]
             best_choice = i 
     print("\n---------------- Split output line ----------------")
-    print(f"\nBest split size is {split_size[best_choice]}, latency is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
+    print(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
     
    
 
 
 def run_worker(rank, world_size, num_split):
 
-    os.environ['MASTER_ADDR'] = '127.0.0.1' #'10.52.3.142'
+    os.environ['MASTER_ADDR'] = '10.52.3.175' #'127.0.0.1'
     os.environ['MASTER_PORT'] = '29501'
-    os.environ["TP_SOCKET_IFNAME"] = "lo0"
-    os.environ["GLOO_SOCKET_IFNAME"] = 'lo0'
+    os.environ["TP_SOCKET_IFNAME"] = "eno1"
+    os.environ["GLOO_SOCKET_IFNAME"] = 'eno1'
 
     # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
     options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=128,rpc_timeout=3000)
@@ -348,7 +353,7 @@ def run_worker(rank, world_size, num_split):
     rpc.shutdown()
 
 if __name__=="__main__":
-    world_size = 2
+    world_size = 4
     rank=int(sys.argv[1])
     num_split=[8]
 
