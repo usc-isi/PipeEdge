@@ -28,6 +28,7 @@ python runtime.py 0
 - [x] Test for multiple nodes 
 - [x] Test for vit-large model
 - [x] Test for vit-huge model
+- [ ] Add profile python script
 - [ ] Solve the memory leak problem
 
 
