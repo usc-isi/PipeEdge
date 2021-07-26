@@ -1,4 +1,11 @@
 # EdgePipe
+Requirement:
+PyTorch > 1.8.1
+
+Install [transformers](https://huggingface.co/transformers/installation.html) library with:
+```sh
+pip install transformers
+```
 
 
 ## Usage
@@ -18,6 +25,18 @@ eg. in rank 0:
 python runtime.py 0
 ```
 
+**Note: support fine-grained partition with x.5**
+eg. for two layers (layer 0 and layer 1), use:
+```sh
+partition = [0, 0.5, 0.5, 1]
+```
+The include layer for each node is [start_layer, end_layer], thus for even partitioning among 4 nodes, use:
+
+```sh
+partition = [0,2,  3,5,  6,8,  9,11]
+```
+
+
 
 ## TODO
 
@@ -28,7 +47,8 @@ python runtime.py 0
 - [x] Test for multiple nodes 
 - [x] Test for vit-large model
 - [x] Test for vit-huge model
-- [ ] Add profile python script
-- [ ] Solve the memory leak problem
+- [x] Add baseline.py   
+- [ ] Edit profile python script
+- [ ] Solve the memory leak problem (RPC Framework Problem)
 
 
