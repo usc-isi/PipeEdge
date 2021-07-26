@@ -47,8 +47,10 @@ partition = [0,2,  3,5,  6,8,  9,11]
 - [x] Test for multiple nodes 
 - [x] Test for vit-large model
 - [x] Test for vit-huge model
+- [x] Support fine-grained partitioning
 - [x] Add baseline.py   
-- [ ] Edit profile python script
+- [ ] Edit profile script
+- [ ] Edit Partition script
 - [ ] Solve the memory leak problem (RPC Framework Problem)
 
 
