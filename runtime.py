@@ -190,7 +190,6 @@ class TransformerBase(nn.Module):
         ATTENTION_NORM = "LayerNorm_0"
         MLP_NORM = "LayerNorm_2"
         self.hidden_size = self.config.hidden_size
-        print(f"{id}, {ROOT}")
         with torch.no_grad():
             query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
             # print(query_weight)
@@ -368,7 +367,7 @@ def _create_transformershard(class_name, rank, model_name, is_first, is_last, st
 # 'google/vit-huge-patch14-224-in21k'
 model_name= 'google/vit-base-patch16-224'
 total_rank = 4
-partition =   [0,4, 5,8, 9,9.5, 9.5,11] #[0,2, 3,5, 6,8, 9,11] #[0,2, 3,5, 6,8, 9,11] 
+partition =   [0,5, 6,9.5, 9.5,10, 11,11] #[0,2, 3,5, 6,8, 9,11] #[0,2, 3,5, 6,8, 9,11] 
 num_batches = 1
 batch_size = 256
 
@@ -425,11 +424,11 @@ class DistTransformer(nn.Module):
                 # print(f"rref info {rref_info}")
                 # print(f"debug info {debug_info}")
             
-            y_rref.to_here()
-            x_rref.to_here()
-            del y_rref
-            del x_rref
-            gc.collect()
+            # y_rref.to_here()
+            # x_rref.to_here()
+            # del y_rref
+            # del x_rref
+            # gc.collect()
             out_futures.append(z_rref)
         return torch.cat(torch.futures.wait_all(out_futures))
 
@@ -493,7 +492,7 @@ def run_worker(rank, world_size, num_split):
     os.environ["GLOO_SOCKET_IFNAME"] = 'eth0'
 
     # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
-    options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=16,rpc_timeout=3000)
+    options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=64,rpc_timeout=3000)
 
 
     if rank == 0:
