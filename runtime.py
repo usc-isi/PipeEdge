@@ -149,7 +149,7 @@ class TransformerBase(nn.Module):
         ## Judge start whole VIT_Layer id:
         if self.start_layer_is_half:
             vit_layer_start_id = floor(self.start_layer)+2
-            print(f">>>> Load {floor(self.start_layer)+2}'s MLP + LayerNorm layer for start half layer")
+            print(f">>>> Load {floor(self.start_layer)+1}'s MLP + LayerNorm layer for start half layer")
         else:
             vit_layer_start_id = self.start_layer
         
@@ -367,10 +367,10 @@ def _create_transformershard(class_name, rank, model_name, is_first, is_last, st
 # 'google/vit-large-patch16-224'
 # 'google/vit-huge-patch14-224-in21k'
 model_name= 'google/vit-base-patch16-224'
-total_rank = 6
-partition =   [0,0.5,0.5,1, 2,4, 5,8, 9,9.5,9.5,11] #[0,2, 3,5, 6,8, 9,11] #[0,2, 3,5, 6,8, 9,11] 
+total_rank = 4
+partition =   [0,4, 5,8, 9,9.5, 9.5,11] #[0,2, 3,5, 6,8, 9,11] #[0,2, 3,5, 6,8, 9,11] 
 num_batches = 1
-batch_size = 5
+batch_size = 256
 
 ## random data
 # img = torch.randn(3, 384, 384)
@@ -449,7 +449,7 @@ def run_master(split_size):
     print("Run mastering \n")
     work_list = [f"worker{i}" for i in range(total_rank)]
     ## for verification 
-    origin_model = ViTForImageClassification.from_pretrained(model_name)
+    # origin_model = ViTForImageClassification.from_pretrained(model_name)
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
         model =  DistTransformer(model_name, split_size[si], work_list)
@@ -458,12 +458,12 @@ def run_master(split_size):
         for i in range(num_batches):
             # generate random inputs and labels       
             outputs = model(inputs['pixel_values'])
-            # del outputs
-            # gc.collect()
+            del outputs
+            gc.collect()
             # print(f"outputs is {outputs}")
-            predicted_class_idx = outputs[0].argmax(-1).item()
+            # predicted_class_idx = outputs[0].argmax(-1).item()
             
-            print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
+            # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
         ## Calculate time
         tok = time.time()
         latency = tok-tik
@@ -487,10 +487,10 @@ def run_master(split_size):
 
 def run_worker(rank, world_size, num_split):
 
-    os.environ['MASTER_ADDR'] = '127.0.0.1' #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
+    os.environ['MASTER_ADDR'] = '172.30.0.21' #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
     os.environ['MASTER_PORT'] = '29501'
-    # os.environ["TP_SOCKET_IFNAME"] = "eth0"
-    # os.environ["GLOO_SOCKET_IFNAME"] = 'eth0'
+    os.environ["TP_SOCKET_IFNAME"] = "eth0"
+    os.environ["GLOO_SOCKET_IFNAME"] = 'eth0'
 
     # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
     options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=16,rpc_timeout=3000)
@@ -521,7 +521,7 @@ def run_worker(rank, world_size, num_split):
 if __name__=="__main__":
     world_size = total_rank
     rank=int(sys.argv[1])
-    num_split=[5]
+    num_split=[8]
 
     print(f"{model_name}, {batch_size}, {num_split}, split method is {partition}")
     
