@@ -49,6 +49,7 @@ partition = [0,2,  3,5,  6,8,  9,11]
 - [x] Test for vit-huge model
 - [x] Support fine-grained partitioning
 - [x] Add baseline.py   
+- [ ] Operator-level partition method
 - [ ] Edit profile script
 - [ ] Import profile to Partition
 - [ ] Edit Partition script
