@@ -25,15 +25,25 @@ eg. in rank 0:
 python runtime.py 0
 ```
 
-**Note: support fine-grained partition with x.5**
-eg. for two layers (layer 0 and layer 1), use:
-```sh
-partition = [0, 0.5, 0.5, 1]
-```
-The include layer for each node is [start_layer, end_layer], thus for even partitioning among 4 nodes, use:
+**Note: support operation level partition**
+For example:
 
-```sh
-partition = [0,2,  3,5,  6,8,  9,11]
+ViT-Base model has 12 layers, the range is [1, 12*4] = [1, 48]
+
+Even partitioning for 2 nodes:
+```
+partition = [1, 24,   25, 48]
+```
+Uneven partitioning for 2 nodes:
+
+```
+partition = [1, 47, 48,48]
+```
+
+For 4 nodes partition:
+
+```
+partition = [1, 4, 5,8, 9, 20, 21,48]
 ```
 
 
@@ -49,7 +59,7 @@ partition = [0,2,  3,5,  6,8,  9,11]
 - [x] Test for vit-huge model
 - [x] Support fine-grained partitioning
 - [x] Add baseline.py   
-- [ ] Operator-level partition method
+- [x] Operator-level partition method
 - [ ] Edit profile script
 - [ ] Import profile to Partition
 - [ ] Edit Partition script
