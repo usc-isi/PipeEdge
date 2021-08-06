@@ -3,6 +3,7 @@ import sys
 import gc
 import math
 import threading
+import psutil
 import requests
 import time
 import torch
@@ -24,14 +25,15 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 
 ## Force pytorch use CPU
 device = torch.device('cpu')
-MASTER_ADDR = '127.0.0.1' #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
+MASTER_ADDR = '172.30.0.21' #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
 MASTER_PORT = '29501'
+SOCKET_IFNAME = "eth0"
 # parallel_threads = 2
 # torch.set_num_threads(parallel_threads)
 # torch.set_num_interop_threads(parallel_threads)
 torch.set_grad_enabled(False)
 print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
-
+process = psutil.Process(os.getpid())
 #########################################################
 #                 Configuration for Network             #
 #########################################################
@@ -42,12 +44,12 @@ print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_th
 # 'google/vit-large-patch16-224'
 # 'google/vit-huge-patch14-224-in21k'
 model_name= 'google/vit-base-patch16-224'
-total_rank = 2
-partition =   [1,9, 10,48]  #[0,5, 6,9.5, 9.5,10, 11,11] #[0,2, 3,5, 6,8, 9,11] #[0,2, 3,5, 6,8, 9,11] 
+total_rank = 4
+partition =   [1,24, 25,42, 43,44, 45,48]  #[0,5, 6,9.5, 9.5,10, 11,11] #[0,2, 3,5, 6,8, 9,11] #[0,2, 3,5, 6,8, 9,11] 
 num_batches = 1
-batch_size = 8
-num_worker_threads = 128
-splits = [8]
+batch_size = 128
+num_worker_threads = 32
+splits = [6]
 operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
 ## random data
 # img = torch.randn(3, 384, 384)
@@ -102,6 +104,7 @@ class TransformerBase(nn.Module):
             print(f">>>> Load weight file f{self.weights_file_name}")
         self._make_layer()
         print(f"======= Finish Build TransformerShard{self.rank} ==========")
+        gc.collect()
     
     def _make_layer(self):
         ## first Shard
@@ -122,6 +125,8 @@ class TransformerBase(nn.Module):
                 if self.load_weight:
                     layer = self.load_layer_weights(math.ceil(i/4)-1, layer, False, False, True, i%4)
                 self.first_ops.append(layer)
+                del layer
+                gc.collect()
             self.current_layer_idx = min(self.end_layer+1, math.ceil(self.start_layer/4)*4+1)
 
         ## mid unit part, the whole vit_layer
@@ -131,6 +136,8 @@ class TransformerBase(nn.Module):
             if self.load_weight:
                 layer = self.load_layer_weights(math.ceil(self.current_layer_idx/4)-1, layer)
             self.vit_layers.append(layer)
+            del layer
+            gc.collect()
             print(f">>>> Load the {math.ceil(self.current_layer_idx/4)-1}-th ViT Layer, load weight is {self.load_weight}")
             self.current_layer_idx += 4
         
@@ -144,6 +151,8 @@ class TransformerBase(nn.Module):
             if self.load_weight:
                 layer = self.load_layer_weights(math.ceil(i/4)-1, layer, False, False, True, i%4)
             self.last_ops.append(layer)
+            del layer
+            gc.collect()
         
         ## last Shard
         if self.is_last:
@@ -167,21 +176,15 @@ class TransformerBase(nn.Module):
     def _build_kernel(self, kernel_id, vit_layer_id, load_weight=True):
         layers = nn.ModuleList()
         if kernel_id == 1:
-            self.layernorm_before = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
-            self.ViTSelfAttention = ViTSelfAttention(self.config)
-            layers.append(self.layernorm_before)
-            layers.append(self.ViTSelfAttention)
+            layers.append(nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps))
+            layers.append(ViTSelfAttention(self.config))
         elif kernel_id == 2:
-            self.ViTSelfOutput = ViTSelfOutput(self.config)
-            layers.append(self.ViTSelfOutput)
+            layers.append(ViTSelfOutput(self.config))
         elif kernel_id == 3:
-            self.layernorm_after = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
-            self.ViTintermediate = ViTIntermediate(self.config)
-            layers.append(self.layernorm_after)
-            layers.append(self.ViTintermediate)
+            layers.append(nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps))
+            layers.append( ViTIntermediate(self.config))
         else:
-            self.ViTOutput = ViTOutput(self.config)
-            layers.append(self.ViTOutput)
+            layers.append(ViTOutput(self.config))
         if load_weight:
             self.load_layer_weights(vit_layer_id, layers, False, False, load_weight, kernel_id)
         return layers
@@ -258,7 +261,7 @@ class TransformerBase(nn.Module):
                     transformer_layer.layernorm_before.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_NORM, "bias")]))
                     transformer_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
                     transformer_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
-
+                    del query_weight, key_weight, value_weight, query_bias, key_bias, value_bias, mlp_weight_0, mlp_weight_1,mlp_bias_0, mlp_bias_1
                 elif kernel_id == 1:
 
                     query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
@@ -278,11 +281,13 @@ class TransformerBase(nn.Module):
                     transformer_layer[1].query.bias.copy_(query_bias)
                     transformer_layer[1].key.bias.copy_(key_bias)
                     transformer_layer[1].value.bias.copy_(value_bias)
+                    del query_weight, key_weight, value_weight, query_bias, key_bias, value_bias
                 elif kernel_id == 2:
                     out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                     out_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "bias")]).view(-1)
                     transformer_layer[0].dense.weight.copy_(out_weight)
                     transformer_layer[0].dense.bias.copy_(out_bias)
+                    del out_weight, out_bias
                 elif kernel_id == 3:
                     transformer_layer[0].weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
                     transformer_layer[0].bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
@@ -290,11 +295,13 @@ class TransformerBase(nn.Module):
                     mlp_bias_0 = torch.from_numpy(weights[os.path.join(ROOT, FC_0, "bias")]).t()
                     transformer_layer[1].dense.weight.copy_(mlp_weight_0)
                     transformer_layer[1].dense.bias.copy_(mlp_bias_0)
+                    del mlp_weight_0, mlp_bias_0
                 elif kernel_id == 0:
                     mlp_weight_1 = torch.from_numpy(weights[os.path.join(ROOT, FC_1, "kernel")]).t()
                     mlp_bias_1 = torch.from_numpy(weights[os.path.join(ROOT, FC_1, "bias")]).t()
                     transformer_layer[0].dense.weight.copy_(mlp_weight_1)
                     transformer_layer[0].dense.bias.copy_(mlp_bias_1)
+                    del mlp_weight_1, mlp_bias_1
 
         del weights
         gc.collect()
@@ -318,12 +325,12 @@ class TransformerBase(nn.Module):
 
 
     @torch.no_grad()
-    def forward(self, x):
+    def forward(self, x_rref):
         if self.is_first:
-            x = x.to_here()
-            skip = torch.zeros([8, 197, 768])
+            x = x_rref.to_here()
         else:
-            x, skip = x.to_here()
+            x, skip = x_rref.to_here()
+        del x_rref
         with self._lock:
             start = time.time()
             if self.is_first:
@@ -349,9 +356,11 @@ class TransformerBase(nn.Module):
 
         self.total_time +=  (end - start)
         self.total_batch += 1
+        print(f"Round {self.total_batch}: memory {process.memory_info().rss // 1000000} MB")
         print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         if self.is_last:
             return x
+        gc.collect()
         return x, skip
 
     def parameter_rrefs(self):
@@ -417,10 +426,11 @@ class DistTransformer(nn.Module):
             
             # y_rref.to_here()
             x_rref.to_here()
-            # del y_rref
+            del y_rref
             del x_rref
-            gc.collect()
             out_futures.append(z_rref)
+            del z_rref
+            gc.collect()
         return torch.cat(torch.futures.wait_all(out_futures))
 
 
@@ -439,7 +449,7 @@ def run_master(split_size):
     print("Run mastering \n")
     work_list = [f"worker{i}" for i in range(total_rank)]
     ## for verification 
-    origin_model = ViTForImageClassification.from_pretrained(model_name)
+    # origin_model = ViTForImageClassification.from_pretrained(model_name)
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
         model =  DistTransformer(model_name, split_size[si], work_list)
@@ -448,12 +458,12 @@ def run_master(split_size):
         for i in range(num_batches):
             # generate random inputs and labels       
             outputs = model(inputs['pixel_values'])
-            print(f"outputs is {outputs}")
-            # del outputs
-            # gc.collect()
-            predicted_class_idx = outputs[0].argmax(-1).item()
+            # print(f"outputs is {outputs}")
+            del outputs
+            gc.collect()
+            # predicted_class_idx = outputs[0].argmax(-1).item()
             
-            print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
+            # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
         ## Calculate time
         tok = time.time()
         latency = tok-tik
@@ -479,8 +489,8 @@ def run_worker(rank, world_size, num_split):
 
     os.environ['MASTER_ADDR'] = MASTER_ADDR #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
     os.environ['MASTER_PORT'] = MASTER_PORT
-    # os.environ["TP_SOCKET_IFNAME"] = "eth0"
-    # os.environ["GLOO_SOCKET_IFNAME"] = 'eth0'
+    os.environ["TP_SOCKET_IFNAME"] = SOCKET_IFNAME
+    os.environ["GLOO_SOCKET_IFNAME"] = SOCKET_IFNAME
 
     # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
     options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=num_worker_threads,rpc_timeout=3000)
