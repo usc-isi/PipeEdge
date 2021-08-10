@@ -27,7 +27,7 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 device = torch.device('cpu')
 MASTER_ADDR = '172.30.0.21' #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
 MASTER_PORT = '29501'
-SOCKET_IFNAME = "eth0"
+SOCKET_IFNAME =  "eth0" #"lo0" #"eth0"
 # parallel_threads = 2
 # torch.set_num_threads(parallel_threads)
 # torch.set_num_interop_threads(parallel_threads)
@@ -44,12 +44,14 @@ process = psutil.Process(os.getpid())
 # 'google/vit-large-patch16-224'
 # 'google/vit-huge-patch14-224-in21k'
 model_name= 'google/vit-base-patch16-224'
-total_rank = 4
-partition =   [1,24, 25,42, 43,44, 45,48]  #[0,5, 6,9.5, 9.5,10, 11,11] #[0,2, 3,5, 6,8, 9,11] #[0,2, 3,5, 6,8, 9,11] 
+total_rank = 5
+start_assist = True
+assistant_node = 1
+partition =   [1,13, 14,28, 29,43, 44,44, 45,48]  #[0,5, 6,9.5, 9.5,10, 11,11] #[0,2, 3,5, 6,8, 9,11] #[0,2, 3,5, 6,8, 9,11] 
 num_batches = 1
 batch_size = 128
-num_worker_threads = 32
-splits = [6]
+num_worker_threads = 128
+splits = [4]
 operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
 ## random data
 # img = torch.randn(3, 384, 384)
@@ -325,18 +327,39 @@ class TransformerBase(nn.Module):
 
 
     @torch.no_grad()
-    def forward(self, x_rref):
+    def forward(self, x_rref, y_rref=None):
         if self.is_first:
             x = x_rref.to_here()
         else:
             x, skip = x_rref.to_here()
         del x_rref
+        if y_rref != None:
+            t, skip_t = y_rref.to_here()
+            x = torch.cat([x, t], 0)
+            skip = torch.cat([skip, skip_t], 0)
+            del y_rref, t, skip_t
+        
+        if start_assist and self.rank == 2:
+            print(x.size())
+            s, _, _ = x.size()
+            s = s//2
+            # print(f"s= {s}")
+            # print(f"-----{self.rank}")
+            x = torch.split(x, s)[0]
+            skip = torch.split(skip, s)[0]
+            # print(f"-----x.size---{x.size()}-------{skip.size()}")
+        elif start_assist and self.rank == 4:
+            s, _, _ = x.size()
+            s = s//2
+            # print(f"s= {s}")
+            x = torch.split(x,  s)[1]
+            skip = torch.split(skip,  s)[1]
         with self._lock:
             start = time.time()
             if self.is_first:
                 x = self.embeddings(x)
                 skip = x
-
+            # print(f"---\n x size is {x.size()}, {skip.size()}")
             if self.has_first_ununit:
                 for i in range(len(self.first_ops)):
                     x, skip = self.forward_kernel(self.first_ops[i], x, skip, (self.start_layer+i)%4)
@@ -392,8 +415,12 @@ for _name in _shard_class:
     else:
         globals()[_name] = _create_transformershard(_name, rank, model_name, False, False, partition[2*rank], partition[2*rank+1], True )
     shard_class_list.append(eval(_name))
+
     rank += 1
 
+class TransformerShard_Ass(TransformerBase):
+    def __init__(self):
+        super().__init__(5, model_name, False, False, partition[6], partition[7], True)
 
 #########################################################
 #             Stitch Shards into one Module             #
@@ -406,6 +433,10 @@ class DistTransformer(nn.Module):
         for i in range(total_rank):
             exec(f"self.p{i+1}_rref= rpc.remote(workers[{i}],shard_class_list[{i}])")
             self.rref_list.append(eval(f"self.p{i+1}_rref"))
+        if start_assist:
+            self.p6_rref = rpc.remote(workers[5], 
+            TransformerShard_Ass
+            )
 
     def forward(self, xs):
         out_futures = []
@@ -414,9 +445,13 @@ class DistTransformer(nn.Module):
             for i in range(total_rank):
                 if i == 0:
                     y_rref = self.rref_list[i].remote().forward(x_rref)
-                elif i == total_rank-1:
+                elif start_assist and i == total_rank-1:
+                    z_rref = self.rref_list[i].rpc_async().forward(t1_rref, t2_rref)
+                elif start_assist == False and i == total_rank - 1:
                     z_rref = self.rref_list[i].rpc_async().forward(y_rref)
-                     
+                elif start_assist and i == 3:
+                    t1_rref = self.rref_list[3].remote().forward(y_rref)
+                    t2_rref = self.p6_rref.remote().forward(y_rref)
                 else:
                     y_rref = self.rref_list[i].remote().forward(y_rref)
                 # rref_info = _rref_context_get_debug_info()
@@ -447,7 +482,7 @@ feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
 def run_master(split_size):
     # put the two model parts on worker1 and worker2 respectively
     print("Run mastering \n")
-    work_list = [f"worker{i}" for i in range(total_rank)]
+    work_list = [f"worker{i}" for i in range(total_rank+assistant_node)]
     ## for verification 
     # origin_model = ViTForImageClassification.from_pretrained(model_name)
     for si in range(len(split_size)):
@@ -519,7 +554,7 @@ def run_worker(rank, world_size, num_split):
     rpc.shutdown()
 
 if __name__=="__main__":
-    world_size = total_rank
+    world_size = total_rank + assistant_node
     rank=int(sys.argv[1])
     num_split= splits
 
