@@ -518,7 +518,7 @@ def run_master(split_size):
 
 def run_worker(rank, world_size, num_split):
 
-    os.environ['MASTER_ADDR'] = MASTER_ADDR #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
+    os.environ['MASTER_ADDR'] = MASTER_ADDR 
     os.environ['MASTER_PORT'] = MASTER_PORT
     os.environ["TP_SOCKET_IFNAME"] = SOCKET_IFNAME
     os.environ["GLOO_SOCKET_IFNAME"] = SOCKET_IFNAME
