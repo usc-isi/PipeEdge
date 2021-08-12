@@ -7,16 +7,11 @@ import psutil
 import requests
 import time
 import torch
-from math import floor
 import numpy as np
 from PIL import Image
 import torch.nn as nn
-import torch.distributed.autograd as dist_autograd
 import torch.distributed.rpc as rpc
-from torch.distributed.rpc.api import _delete_all_user_and_unforked_owner_rrefs
-from torch.distributed.rpc import RRef, _get_debug_info, _rref_context_get_debug_info
-from torch.nn import functional as F
-from transformers import AutoConfig, ViTFeatureExtractor, ViTForImageClassification, ViTModel
+from transformers import AutoConfig, ViTFeatureExtractor, ViTForImageClassification
 from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput,ViTIntermediate, ViTOutput
 
 #########################################################
