@@ -445,10 +445,6 @@ class DistTransformer(nn.Module):
                      
                 else:
                     y_rref = self.rref_list[i].remote().forward(y_rref)
-                # rref_info = _rref_context_get_debug_info()
-                # debug_info = _get_debug_info()
-                # print(f"rref info {rref_info}")
-                # print(f"debug info {debug_info}")
             
             # y_rref.to_here()
             x_rref.to_here()
