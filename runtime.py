@@ -16,7 +16,7 @@ import torch.distributed.rpc as rpc
 from torch.distributed.rpc.api import _delete_all_user_and_unforked_owner_rrefs
 from torch.distributed.rpc import RRef, _get_debug_info, _rref_context_get_debug_info
 from torch.nn import functional as F
-from transformers import AutoConfig, ViTFeatureExtractor, ViTForImageClassification
+from transformers import AutoConfig, ViTFeatureExtractor, ViTForImageClassification, ViTModel
 from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput,ViTIntermediate, ViTOutput
 
 #########################################################
@@ -24,10 +24,11 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 #########################################################
 
 ## Force pytorch use CPU
+# torch.set_printoptions(profile="full")
 device = torch.device('cpu')
-MASTER_ADDR = '172.30.0.21' #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
+MASTER_ADDR = '127.0.0.1' #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
 MASTER_PORT = '29501'
-SOCKET_IFNAME = "eth0"
+SOCKET_IFNAME = "lo0"
 # parallel_threads = 2
 # torch.set_num_threads(parallel_threads)
 # torch.set_num_interop_threads(parallel_threads)
@@ -45,11 +46,11 @@ process = psutil.Process(os.getpid())
 # 'google/vit-huge-patch14-224-in21k'
 model_name= 'google/vit-base-patch16-224'
 total_rank = 4
-partition =   [1,24, 25,42, 43,44, 45,48]  #[0,5, 6,9.5, 9.5,10, 11,11] #[0,2, 3,5, 6,8, 9,11] #[0,2, 3,5, 6,8, 9,11] 
+partition = [1,24, 25,40, 41,44, 45,48] #[1,8, 9,13, 14,27, 28,41, 42,44, 45,48] #[1,17, 18,25, 26,37, 38,41, 42,45, 46,48] #[1,24, 25,48] #[1,24, 25,42, 43,44, 45,48]   
 num_batches = 1
-batch_size = 128
+batch_size = 1
 num_worker_threads = 32
-splits = [6]
+splits = [1]
 operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
 ## random data
 # img = torch.randn(3, 384, 384)
@@ -87,6 +88,13 @@ class TransformerBase(nn.Module):
         self._lock = threading.Lock()
         self.total_time = 0
         self.total_batch = 0
+
+        ## quantization observer 
+        self.observer = torch.quantization.HistogramObserver(dtype=torch.qint8,qscheme=torch.per_channel_affine)
+        self.x_scale = 0.1
+        self.s_scale = 0.1
+        self.x_zp = 0
+        self.s_zp = 0
 
         ## operations/transformer layers set
         self.first_ops = nn.ModuleList()
@@ -322,6 +330,10 @@ class TransformerBase(nn.Module):
             x = layer[0](x, skip)
             skip = x
         return x, skip
+    
+    def _dequantize(self, x, scale, zero_point):
+        xdq = (x - zero_point) * scale
+        return xdq
 
 
     @torch.no_grad()
@@ -330,7 +342,12 @@ class TransformerBase(nn.Module):
             x = x_rref.to_here()
         else:
             x, skip = x_rref.to_here()
+            print(f"After receive, x is {x}, skip is {skip}, miaomiaomiao??? dequantizaiotn {x.dequantize()}")
+            x = x.dequantize()
+            skip = skip.dequantize()
+            print(f"After dequantize, x is {x}, skip is {skip}")
         del x_rref
+
         with self._lock:
             start = time.time()
             if self.is_first:
@@ -361,7 +378,18 @@ class TransformerBase(nn.Module):
         if self.is_last:
             return x
         gc.collect()
-        return x, skip
+        self.observer(x)
+        self.x_scale, self.x_zp = self.observer.calculate_qparams()
+        print(f"X scale is {self.x_scale}, zp is {self.x_zp}")
+        print(f"max x is {torch.max(x)}, min is {torch.min(x)}")
+        self.observer(skip)
+        self.s_scale, self.s_zp = self.observer.calculate_qparams()
+        print(f"Before quantization, x is {x}, skip is {skip}")
+        xq = torch.quantize_per_tensor(x, scale = float(self.x_scale), zero_point = int(self.x_zp), dtype=torch.qint8)
+        sq = torch.quantize_per_tensor(skip, scale = float(self.s_scale), zero_point = int(self.s_zp), dtype=torch.qint8)
+        print(f"After quantization, xq is {xq}, int is {xq.int_repr()}, skip is {sq}, int is {sq.int_repr()}")
+        print(f"have a try dequantizaition here {xq.dequantize()}")
+        return xq, sq
 
     def parameter_rrefs(self):
         return [RRef(p) for p in self.parameters()]
@@ -444,12 +472,20 @@ throughputs = []
 
 feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
 
+def EuclideanDistances(a,b):
+    sq_a = a**2
+    sum_sq_a = torch.sum(sq_a,dim=1).unsqueeze(1)  # m->[m, 1]
+    sq_b = b**2
+    sum_sq_b = torch.sum(sq_b,dim=1).unsqueeze(0)  # n->[1, n]
+    bt = b.t()
+    return torch.sqrt(sum_sq_a+sum_sq_b-2*a.mm(bt))
+
 def run_master(split_size):
     # put the two model parts on worker1 and worker2 respectively
     print("Run mastering \n")
     work_list = [f"worker{i}" for i in range(total_rank)]
     ## for verification 
-    # origin_model = ViTForImageClassification.from_pretrained(model_name)
+    origin_model = ViTForImageClassification.from_pretrained(model_name)
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
         model =  DistTransformer(model_name, split_size[si], work_list)
@@ -458,12 +494,13 @@ def run_master(split_size):
         for i in range(num_batches):
             # generate random inputs and labels       
             outputs = model(inputs['pixel_values'])
-            # print(f"outputs is {outputs}")
-            del outputs
-            gc.collect()
-            # predicted_class_idx = outputs[0].argmax(-1).item()
-            
-            # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
+            # del outputs
+            # gc.collect()
+            predicted_class_idx = outputs[0].argmax(-1).item()
+            true_output = origin_model(**inputs)
+            logits = true_output.logits
+            print(f"logits.shape, outputs.shape, the distance is {torch.dist(outputs, logits)}")
+            print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
         ## Calculate time
         tok = time.time()
         latency = tok-tik
