@@ -45,8 +45,8 @@ process = psutil.Process(os.getpid())
 # 'google/vit-large-patch16-224'
 # 'google/vit-huge-patch14-224-in21k'
 model_name= 'google/vit-base-patch16-224'
-total_rank = 4
-partition = [1,24, 25,40, 41,44, 45,48] #[1,8, 9,13, 14,27, 28,41, 42,44, 45,48] #[1,17, 18,25, 26,37, 38,41, 42,45, 46,48] #[1,24, 25,48] #[1,24, 25,42, 43,44, 45,48]   
+total_rank = 2
+partition = [1, 24,  25,48] #[1,8, 9,13, 14,27, 28,41, 42,44, 45,48] #[1,17, 18,25, 26,37, 38,41, 42,45, 46,48] #[1,24, 25,48] #[1,24, 25,42, 43,44, 45,48]   
 num_batches = 1
 batch_size = 1
 num_worker_threads = 32
@@ -199,6 +199,7 @@ class TransformerBase(nn.Module):
 
     def load_layer_weights(self, id, transformer_layer, load_first = False, load_last=False, load_kernel = False, kernel_id=None):
         weights = np.load(self.weights_file_name)
+        print(f" Hereeeeeeee 1\n\n memory {process.memory_info().rss // 1000000} MB")
         ROOT = f"Transformer/encoderblock_{id}"
         ATTENTION_Q = "MultiHeadDotProductAttention_1/query"
         ATTENTION_K = "MultiHeadDotProductAttention_1/key"
@@ -269,6 +270,7 @@ class TransformerBase(nn.Module):
                     transformer_layer.layernorm_before.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_NORM, "bias")]))
                     transformer_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
                     transformer_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
+                    print(f" Hereeeeeeee 2\n\n memory {process.memory_info().rss // 1000000} MB")
                     del query_weight, key_weight, value_weight, query_bias, key_bias, value_bias, mlp_weight_0, mlp_weight_1,mlp_bias_0, mlp_bias_1
                 elif kernel_id == 1:
 
@@ -311,6 +313,7 @@ class TransformerBase(nn.Module):
                     transformer_layer[0].dense.bias.copy_(mlp_bias_1)
                     del mlp_weight_1, mlp_bias_1
 
+        print(f" Hereeeeeeee 3\n\n memory {process.memory_info().rss // 1000000} MB")
         del weights
         gc.collect()
         return transformer_layer
