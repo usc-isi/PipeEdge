@@ -25,9 +25,9 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 
 ## Force pytorch use CPU
 device = torch.device('cpu')
-MASTER_ADDR = '172.30.0.21' #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
+MASTER_ADDR = '127.0.0.1' #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
 MASTER_PORT = '29501'
-SOCKET_IFNAME = "eth0"
+SOCKET_IFNAME = "lo0"
 # parallel_threads = 2
 # torch.set_num_threads(parallel_threads)
 # torch.set_num_interop_threads(parallel_threads)
@@ -45,10 +45,10 @@ process = psutil.Process(os.getpid())
 # 'google/vit-huge-patch14-224-in21k'
 model_name= 'google/vit-base-patch16-224'
 total_rank = 4
-partition =   [1,24, 25,42, 43,44, 45,48]  #[0,5, 6,9.5, 9.5,10, 11,11] #[0,2, 3,5, 6,8, 9,11] #[0,2, 3,5, 6,8, 9,11] 
+partition =   [1, 12, 13,24,  25,36, 37,48]  
 num_batches = 1
-batch_size = 128
-num_worker_threads = 32
+batch_size = 64
+num_worker_threads = 64
 splits = [6]
 operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
 ## random data
@@ -261,6 +261,7 @@ class TransformerBase(nn.Module):
                     transformer_layer.layernorm_before.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_NORM, "bias")]))
                     transformer_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
                     transformer_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
+                    print(f"memory {process.memory_info().rss // 1000000} MB")
                     del query_weight, key_weight, value_weight, query_bias, key_bias, value_bias, mlp_weight_0, mlp_weight_1,mlp_bias_0, mlp_bias_1
                 elif kernel_id == 1:
 
@@ -385,7 +386,9 @@ _shard_class = [f'TransformerShard{i+1}' for i in range(total_rank)]
 rank = 0
 shard_class_list = []
 for _name in _shard_class:
-    if rank == 0:
+    if total_rank == 1:
+        globals()[_name] = _create_transformershard(_name, rank, model_name, True, True, partition[2*rank], partition[2*rank+1], True )
+    elif rank == 0:
         globals()[_name] = _create_transformershard(_name, rank, model_name, True, False, partition[2*rank], partition[2*rank+1], True )
     elif rank == total_rank-1:
         globals()[_name] = _create_transformershard(_name, rank, model_name, False, True, partition[2*rank], partition[2*rank+1], True )
@@ -412,24 +415,29 @@ class DistTransformer(nn.Module):
         for x in iter(xs.split(self.num_split, dim=0)):
             x_rref = RRef(x)
             for i in range(total_rank):
-                if i == 0:
-                    y_rref = self.rref_list[i].remote().forward(x_rref)
-                elif i == total_rank-1:
-                    z_rref = self.rref_list[i].rpc_async().forward(y_rref)
-                     
+                if i == total_rank-1:
+                    y_rref = self.rref_list[i].rpc_async().forward(x_rref)
+                elif i == 0:
+                    x_rref = self.rref_list[i].remote().forward(x_rref)
                 else:
-                    y_rref = self.rref_list[i].remote().forward(y_rref)
+                    x_rref = self.rref_list[i].remote().forward(x_rref)
+
+                # if i == 0:
+                #     y_rref = self.rref_list[i].remote().forward(x_rref)
+                # elif i == total_rank-1:
+                #     y_rref = self.rref_list[i].rpc_async().forward(y_rref)
+                     
+                # else:
+                #     y_rref = self.rref_list[i].remote().forward(y_rref)
                 # rref_info = _rref_context_get_debug_info()
                 # debug_info = _get_debug_info()
                 # print(f"rref info {rref_info}")
                 # print(f"debug info {debug_info}")
-            
             # y_rref.to_here()
             x_rref.to_here()
-            del y_rref
             del x_rref
-            out_futures.append(z_rref)
-            del z_rref
+            out_futures.append(y_rref)
+            del y_rref
             gc.collect()
         return torch.cat(torch.futures.wait_all(out_futures))
 
