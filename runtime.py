@@ -6,6 +6,7 @@ import threading
 import psutil
 import requests
 import time
+import argparse
 import torch
 from math import floor
 import numpy as np
@@ -44,8 +45,8 @@ process = psutil.Process(os.getpid())
 # 'google/vit-large-patch16-224'
 # 'google/vit-huge-patch14-224-in21k'
 model_name= 'google/vit-base-patch16-224'
-total_rank = 1
-partition =   [1, 48]  
+total_rank = 2
+partition =   [1, 24,  25,48]  
 num_batches = 1
 batch_size = 64
 num_worker_threads = 64
@@ -526,8 +527,28 @@ def run_worker(rank, world_size, num_split):
     rpc.shutdown()
 
 if __name__=="__main__":
-    world_size = total_rank
-    rank=int(sys.argv[1])
+    parser = argparse.ArgumentParser(description='EdgePipe System')
+    parser.add_argument('--rank', type=int, required=True, help='node rank')
+    parser.add_argument('--total-rank', type=int, required=True, help='Total rank numbers')
+    parser.add_argument('--device', type=str, default='cpu',
+                        help='Device for inference (cpu (default) or cuda)')
+    parser.add_argument('--batch-size', type=int, default=64,
+                        help='input batch size (default: 64)')
+    parser.add_argument('--MASTER-ADDR', type=str, default='127.0.0.1',
+                        help='127.0.0.1 (default)')
+    parser.add_argument('--MASTER-PORT', type=str, default='29501',
+                        help='master port, default: 29501')
+    parser.add_argument('--SOCKET-IFNAME', type=str, default='lo0',
+                        help='socket ifname, default: lo0')
+    parser.add_argument('--parallel-threads', type=int, default=2,
+                        help='parallel threads, default: 2')
+
+    parser.add_argument('--model-name', type=str, default='google/vit-base-patch16-224',
+                        help='model for pipeline, default is google/vit-base-patch16-224,[google/vit-large-patch16-224], [google/vit-huge-patch14-224-in21k]')
+    
+    args = parser.parse_args()
+    world_size = args.total_rank #otal_rank
+    rank=args.rank #int(sys.argv[1])
     num_split= splits
 
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
