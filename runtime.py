@@ -470,7 +470,6 @@ def run_master(split_size):
             del outputs
             gc.collect()
             # predicted_class_idx = outputs[0].argmax(-1).item()
-            
             # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
         ## Calculate time
         tok = time.time()
