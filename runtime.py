@@ -44,8 +44,8 @@ process = psutil.Process(os.getpid())
 # 'google/vit-large-patch16-224'
 # 'google/vit-huge-patch14-224-in21k'
 model_name= 'google/vit-base-patch16-224'
-total_rank = 4
-partition =   [1, 12, 13,24,  25,36, 37,48]  
+total_rank = 1
+partition =   [1, 48]  
 num_batches = 1
 batch_size = 64
 num_worker_threads = 64
