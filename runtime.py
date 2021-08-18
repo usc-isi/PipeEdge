@@ -381,21 +381,13 @@ def _create_transformershard(class_name, rank, model_name, is_first, is_last, st
     return TransformerShardCls
 
 
-_shard_class = [f'TransformerShard{i+1}' for i in range(total_rank)]
-
-rank = 0
 shard_class_list = []
-for _name in _shard_class:
-    if total_rank == 1:
-        globals()[_name] = _create_transformershard(_name, rank, model_name, True, True, partition[2*rank], partition[2*rank+1], True )
-    elif rank == 0:
-        globals()[_name] = _create_transformershard(_name, rank, model_name, True, False, partition[2*rank], partition[2*rank+1], True )
-    elif rank == total_rank-1:
-        globals()[_name] = _create_transformershard(_name, rank, model_name, False, True, partition[2*rank], partition[2*rank+1], True )
-    else:
-        globals()[_name] = _create_transformershard(_name, rank, model_name, False, False, partition[2*rank], partition[2*rank+1], True )
+for rank in range(total_rank):
+    _name = f'TransformerShard{rank+1}'
+    _is_first = rank == 0
+    _is_last = rank == total_rank-1
+    globals()[_name] = _create_transformershard(_name, rank, model_name, _is_first, _is_last, partition[2*rank], partition[2*rank+1], True)
     shard_class_list.append(eval(_name))
-    rank += 1
 
 
 #########################################################
@@ -414,26 +406,10 @@ class DistTransformer(nn.Module):
         out_futures = []
         for x in iter(xs.split(self.num_split, dim=0)):
             x_rref = RRef(x)
-            for i in range(total_rank):
-                if i == total_rank-1:
-                    y_rref = self.rref_list[i].rpc_async().forward(x_rref)
-                elif i == 0:
-                    x_rref = self.rref_list[i].remote().forward(x_rref)
-                else:
-                    x_rref = self.rref_list[i].remote().forward(x_rref)
+            for i in range(total_rank-1):
+                x_rref = self.rref_list[i].remote().forward(x_rref)
+            y_rref = self.rref_list[total_rank-1].rpc_async().forward(x_rref)
 
-                # if i == 0:
-                #     y_rref = self.rref_list[i].remote().forward(x_rref)
-                # elif i == total_rank-1:
-                #     y_rref = self.rref_list[i].rpc_async().forward(y_rref)
-                     
-                # else:
-                #     y_rref = self.rref_list[i].remote().forward(y_rref)
-                # rref_info = _rref_context_get_debug_info()
-                # debug_info = _get_debug_info()
-                # print(f"rref info {rref_info}")
-                # print(f"debug info {debug_info}")
-            # y_rref.to_here()
             x_rref.to_here()
             del x_rref
             out_futures.append(y_rref)
