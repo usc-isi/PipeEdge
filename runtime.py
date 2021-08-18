@@ -386,8 +386,9 @@ for rank in range(total_rank):
     _name = f'TransformerShard{rank+1}'
     _is_first = rank == 0
     _is_last = rank == total_rank-1
-    globals()[_name] = _create_transformershard(_name, rank, model_name, _is_first, _is_last, partition[2*rank], partition[2*rank+1], True)
-    shard_class_list.append(eval(_name))
+    _shard_cls = _create_transformershard(_name, rank, model_name, _is_first, _is_last, partition[2*rank], partition[2*rank+1], True)
+    shard_class_list.append(_shard_cls)
+    globals()[_name] = _shard_cls
 
 
 #########################################################
@@ -399,8 +400,8 @@ class DistTransformer(nn.Module):
         self.num_split = num_split
         self.rref_list = []
         for i in range(total_rank):
-            exec(f"self.p{i+1}_rref= rpc.remote(workers[{i}],shard_class_list[{i}])")
-            self.rref_list.append(eval(f"self.p{i+1}_rref"))
+            rref = rpc.remote(workers[i], shard_class_list[i])
+            self.rref_list.append(rref)
 
     def forward(self, xs):
         out_futures = []
