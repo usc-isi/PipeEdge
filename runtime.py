@@ -46,11 +46,11 @@ process = psutil.Process(os.getpid())
 # 'google/vit-huge-patch14-224-in21k'
 model_name= 'google/vit-base-patch16-224'
 total_rank = 2
-partition =   [1, 24,  25,48]  
+# partition =   [1, 24,  25,48]  
 num_batches = 1
 batch_size = 64
 num_worker_threads = 64
-splits = [6]
+# splits = [6]
 operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
 ## random data
 # img = torch.randn(3, 384, 384)
@@ -61,6 +61,38 @@ image = Image.open(requests.get(url, stream=True).raw)
 imgs = [image for i in range(batch_size)]
 
 # ***********************  End  **************************#
+parser = argparse.ArgumentParser(description='EdgePipe System')
+parser.add_argument('-r', '--rank', type=int, required=True, help='node rank')
+parser.add_argument('-t', '--total-rank', type=int, required=True, help='Total rank numbers')
+parser.add_argument('--device', type=str, default='cpu',
+                    help='Device for inference (cpu (default) or cuda)')
+parser.add_argument('--batch-size', type=int, default=64,
+                    help='input batch size (default: 64)')
+parser.add_argument('--num-batches', type=int, default=1,
+                    help='the number of batches (default: 1)')
+parser.add_argument('--num-worker-threads', type=int, default=64,
+                    help='for RPC backend worker threads (default: 64)')
+parser.add_argument('--MASTER-ADDR', type=str, default='127.0.0.1',
+                    help='127.0.0.1 (default)')
+parser.add_argument('--MASTER-PORT', type=str, default='29501',
+                    help='master port, default: 29501')
+parser.add_argument('--SOCKET-IFNAME', type=str, default='lo0',
+                    help='socket ifname, default: lo0')
+parser.add_argument('--parallel-threads', type=int, default=2,
+                    help='parallel threads, default: 2')
+parser.add_argument('-p', '--partition', type=int, nargs='+', required=True,
+                    help='partition method, eg: -p 1 24 25 48')
+parser.add_argument('-s', '--split', nargs='+', type=int, default=8, help='the list of split size, eg: -s 6 8 is split=[6,8]')
+
+parser.add_argument('--model-name', type=str, default='google/vit-base-patch16-224',
+                    help='model for pipeline, default is google/vit-base-patch16-224,[google/vit-large-patch16-224], [google/vit-huge-patch14-224-in21k]')
+
+args = parser.parse_args()
+world_size = args.total_rank #otal_rank
+total_rank = args.total_rank
+rank=args.rank #int(sys.argv[1])
+num_split= args.split
+partition = args.partition
 
 #########################################################
 #           Define Model Parallel Transformer           #
@@ -384,19 +416,19 @@ def _create_transformershard(class_name, rank, model_name, is_first, is_last, st
 
 _shard_class = [f'TransformerShard{i+1}' for i in range(total_rank)]
 
-rank = 0
+rank_t = 0
 shard_class_list = []
 for _name in _shard_class:
     if total_rank == 1:
-        globals()[_name] = _create_transformershard(_name, rank, model_name, True, True, partition[2*rank], partition[2*rank+1], True )
-    elif rank == 0:
-        globals()[_name] = _create_transformershard(_name, rank, model_name, True, False, partition[2*rank], partition[2*rank+1], True )
-    elif rank == total_rank-1:
-        globals()[_name] = _create_transformershard(_name, rank, model_name, False, True, partition[2*rank], partition[2*rank+1], True )
+        globals()[_name] = _create_transformershard(_name, rank_t, model_name, True, True, partition[2*rank_t], partition[2*rank_t+1], True )
+    elif rank_t == 0:
+        globals()[_name] = _create_transformershard(_name, rank_t, model_name, True, False, partition[2*rank_t], partition[2*rank_t+1], True )
+    elif rank_t == total_rank-1:
+        globals()[_name] = _create_transformershard(_name, rank_t, model_name, False, True, partition[2*rank_t], partition[2*rank_t+1], True )
     else:
-        globals()[_name] = _create_transformershard(_name, rank, model_name, False, False, partition[2*rank], partition[2*rank+1], True )
+        globals()[_name] = _create_transformershard(_name, rank_t, model_name, False, False, partition[2*rank_t], partition[2*rank_t+1], True )
     shard_class_list.append(eval(_name))
-    rank += 1
+    rank_t += 1
 
 
 #########################################################
@@ -527,29 +559,38 @@ def run_worker(rank, world_size, num_split):
     rpc.shutdown()
 
 if __name__=="__main__":
-    parser = argparse.ArgumentParser(description='EdgePipe System')
-    parser.add_argument('--rank', type=int, required=True, help='node rank')
-    parser.add_argument('--total-rank', type=int, required=True, help='Total rank numbers')
-    parser.add_argument('--device', type=str, default='cpu',
-                        help='Device for inference (cpu (default) or cuda)')
-    parser.add_argument('--batch-size', type=int, default=64,
-                        help='input batch size (default: 64)')
-    parser.add_argument('--MASTER-ADDR', type=str, default='127.0.0.1',
-                        help='127.0.0.1 (default)')
-    parser.add_argument('--MASTER-PORT', type=str, default='29501',
-                        help='master port, default: 29501')
-    parser.add_argument('--SOCKET-IFNAME', type=str, default='lo0',
-                        help='socket ifname, default: lo0')
-    parser.add_argument('--parallel-threads', type=int, default=2,
-                        help='parallel threads, default: 2')
+    # parser = argparse.ArgumentParser(description='EdgePipe System')
+    # parser.add_argument('-r', '--rank', type=int, required=True, help='node rank')
+    # parser.add_argument('-t','--total-rank', type=int, required=True, help='Total rank numbers')
+    # parser.add_argument('--device', type=str, default='cpu',
+    #                     help='Device for inference (cpu (default) or cuda)')
+    # parser.add_argument('--batch-size', type=int, default=64,
+    #                     help='input batch size (default: 64)')
+    # parser.add_argument('--num-batches', type=int, default=1,
+    #                     help='the number of batches (default: 1)')
+    # parser.add_argument('--num-worker-threads', type=int, default=64,
+    #                     help='for RPC backend worker threads (default: 64)')
+    # parser.add_argument('--MASTER-ADDR', type=str, default='127.0.0.1',
+    #                     help='127.0.0.1 (default)')
+    # parser.add_argument('--MASTER-PORT', type=str, default='29501',
+    #                     help='master port, default: 29501')
+    # parser.add_argument('--SOCKET-IFNAME', type=str, default='lo0',
+    #                     help='socket ifname, default: lo0')
+    # parser.add_argument('--parallel-threads', type=int, default=2,
+    #                     help='parallel threads, default: 2')
+    # parser.add_argument('-p', '--partition', type=int, nargs='+', required=True,
+    #                     help='partition method, eg: -p 1 24 25 48')
+    # parser.add_argument('-s', '--split', nargs='+', type=int, default=8, help='the list of split size, eg: -s 6 8 is split=[6,8]')
 
-    parser.add_argument('--model-name', type=str, default='google/vit-base-patch16-224',
-                        help='model for pipeline, default is google/vit-base-patch16-224,[google/vit-large-patch16-224], [google/vit-huge-patch14-224-in21k]')
+    # parser.add_argument('--model-name', type=str, default='google/vit-base-patch16-224',
+    #                     help='model for pipeline, default is google/vit-base-patch16-224,[google/vit-large-patch16-224], [google/vit-huge-patch14-224-in21k]')
     
-    args = parser.parse_args()
-    world_size = args.total_rank #otal_rank
-    rank=args.rank #int(sys.argv[1])
-    num_split= splits
+    # args = parser.parse_args()
+    # world_size = args.total_rank #otal_rank
+    # rank=args.rank #int(sys.argv[1])
+    # num_split= args.split
+    # partition = args.partition
+    print(f"partition is {partition}, rank is {rank}")
 
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
     
