@@ -76,7 +76,6 @@ class TransformerBase(nn.Module):
         self.embeddings = None
         self.layernorm = None
         self.classifier = None
-        self.current_layer_idx = start_layer  ## the next layer to load
         self.start_layer = start_layer
         self.end_layer = end_layer
 
@@ -112,6 +111,8 @@ class TransformerBase(nn.Module):
                 self.load_layer_weights(0, None, load_first = True, load_last=False, load_kernel = False, kernel_id=None)
                 print(f">>>> Load weights for embeddings layer ")
 
+        current_layer_idx = self.start_layer
+
         ## first ununit part 
         if self.start_layer %4 != 1 or (self.start_layer+3 > self.end_layer):
             print(f">>>> For the first model part, load weight is {self.load_weight}:")
@@ -123,23 +124,23 @@ class TransformerBase(nn.Module):
                 self.first_ops.append(layer)
                 del layer
                 gc.collect()
-            self.current_layer_idx = min(self.end_layer+1, math.ceil(self.start_layer/4)*4+1)
+            current_layer_idx = min(self.end_layer+1, math.ceil(self.start_layer/4)*4+1)
 
         ## mid unit part, the whole vit_layer
-        while self.current_layer_idx + 3 <= self.end_layer:
+        while current_layer_idx + 3 <= self.end_layer:
             layer = ViTLayer(self.config)
             if self.load_weight:
-                layer = self.load_layer_weights(math.ceil(self.current_layer_idx/4)-1, layer)
+                layer = self.load_layer_weights(math.ceil(current_layer_idx/4)-1, layer)
             self.vit_layers.append(layer)
             del layer
             gc.collect()
-            print(f">>>> Load the {math.ceil(self.current_layer_idx/4)-1}-th ViT Layer, load weight is {self.load_weight}")
-            self.current_layer_idx += 4
+            print(f">>>> Load the {math.ceil(current_layer_idx/4)-1}-th ViT Layer, load weight is {self.load_weight}")
+            current_layer_idx += 4
         
         ## last unit part
-        if self.end_layer >= self.current_layer_idx:
+        if self.end_layer >= current_layer_idx:
             print(f">>>> For the last model part, load weight is {self.load_weight}:")
-        for i in range(self.current_layer_idx, self.end_layer+1):
+        for i in range(current_layer_idx, self.end_layer+1):
             print(f"    Load the {i%4}-th operation ({operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
             layer = self._build_kernel(i%4, math.ceil(i/4)-1, self.load_weight)
             if self.load_weight:
@@ -340,7 +341,8 @@ class TransformerBase(nn.Module):
                 skip = x
 
             for i, op in enumerate(self.last_ops):
-                x, skip = self.forward_kernel(op, x, skip, (self.current_layer_idx+i)%4)
+                # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with load_layer_weights()
+                x, skip = self.forward_kernel(op, x, skip, (i+1)%4)
 
             if self.is_last:
                 x = self.layernorm(x)
