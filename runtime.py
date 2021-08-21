@@ -23,12 +23,28 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 #########################################################
 #                 Check Enviroment Settings             #
 #########################################################
-
+parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime")
+parser.add_argument("rank", type=int, help="the rank for the current node")
+parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
+parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224", choices=["google/vit-base-patch16-224", 
+"google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k"], help="the neural network model for loading")
+parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
+parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
+parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
+parser.add_argument("-s", "--socket-ifname", type=str, default="lo0", help="socket iframe name, use [ifconfig | ipaddress] to check")
+parser.add_argument("-p","--print", type=str, default = "None", choices=["full", "short", "default"], help="print the [full | short] tensor values")
+parser.add_argument("-t", "--threshold", default=1000, type=int, help="total number of array elements which trigger summarization rather than full repr")
+parser.add_argument("-n", "--num-batches", default=1, type=int, help="total number of batches")
+parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
+parser.add_argument("-w", "--worker-threads", default=64, type=int, help="the number of worker threads for the communication backend")
+parser.add_argument("-sp", "--splits", default="8", help="the list of microbatch size")
+args = parser.parse_args()
+torch.set_printoptions(profile=args.print,threshold=args.threshold)  
 ## Force pytorch use CPU
 device = torch.device('cpu')
-MASTER_ADDR = '127.0.0.1' #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
-MASTER_PORT = '29501'
-SOCKET_IFNAME = "lo0"
+MASTER_ADDR = args.addr 
+MASTER_PORT = args.port
+SOCKET_IFNAME = args.socket_ifname
 # parallel_threads = 2
 # torch.set_num_threads(parallel_threads)
 # torch.set_num_interop_threads(parallel_threads)
@@ -38,19 +54,14 @@ process = psutil.Process(os.getpid())
 #########################################################
 #                 Configuration for Network             #
 #########################################################
-
 # *****  Define the World Size and partition Method ******#
-
-# 'google/vit-base-patch16-224'
-# 'google/vit-large-patch16-224'
-# 'google/vit-huge-patch14-224-in21k'
-model_name= 'google/vit-base-patch16-224'
-total_rank = 2
-# partition =   [1, 24,  25,48]  
-num_batches = 1
-batch_size = 64
-num_worker_threads = 64
-# splits = [6]
+model_name= args.model_name
+total_rank = args.worldsize
+partition =   [int(i) for i in args.partition.split(',')]
+num_batches = args.num_batches
+batch_size = args.batch_size
+num_worker_threads = args.worker_threads
+splits = [int(i) for i in args.splits.split(',')] 
 operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
 ## random data
 # img = torch.randn(3, 384, 384)
@@ -61,38 +72,6 @@ image = Image.open(requests.get(url, stream=True).raw)
 imgs = [image for i in range(batch_size)]
 
 # ***********************  End  **************************#
-parser = argparse.ArgumentParser(description='EdgePipe System')
-parser.add_argument('-r', '--rank', type=int, required=True, help='node rank')
-parser.add_argument('-t', '--total-rank', type=int, required=True, help='Total rank numbers')
-parser.add_argument('--device', type=str, default='cpu',
-                    help='Device for inference (cpu (default) or cuda)')
-parser.add_argument('--batch-size', type=int, default=64,
-                    help='input batch size (default: 64)')
-parser.add_argument('--num-batches', type=int, default=1,
-                    help='the number of batches (default: 1)')
-parser.add_argument('--num-worker-threads', type=int, default=64,
-                    help='for RPC backend worker threads (default: 64)')
-parser.add_argument('--MASTER-ADDR', type=str, default='127.0.0.1',
-                    help='127.0.0.1 (default)')
-parser.add_argument('--MASTER-PORT', type=str, default='29501',
-                    help='master port, default: 29501')
-parser.add_argument('--SOCKET-IFNAME', type=str, default='lo0',
-                    help='socket ifname, default: lo0')
-parser.add_argument('--parallel-threads', type=int, default=2,
-                    help='parallel threads, default: 2')
-parser.add_argument('-p', '--partition', type=int, nargs='+', required=True,
-                    help='partition method, eg: -p 1 24 25 48')
-parser.add_argument('-s', '--split', nargs='+', type=int, default=8, help='the list of split size, eg: -s 6 8 is split=[6,8]')
-
-parser.add_argument('--model-name', type=str, default='google/vit-base-patch16-224',
-                    help='model for pipeline, default is google/vit-base-patch16-224,[google/vit-large-patch16-224], [google/vit-huge-patch14-224-in21k]')
-
-args = parser.parse_args()
-world_size = args.total_rank #otal_rank
-total_rank = args.total_rank
-rank=args.rank #int(sys.argv[1])
-num_split= args.split
-partition = args.partition
 
 #########################################################
 #           Define Model Parallel Transformer           #
@@ -109,10 +88,6 @@ class TransformerBase(nn.Module):
         self.embeddings = None
         self.layernorm = None
         self.classifier = None
-        self.has_first_ununit = False
-        self.has_last_ununit = False
-        self.has_mid_unit = False
-        self.current_layer_idx = start_layer  ## the next layer to load
         self.start_layer = start_layer
         self.end_layer = end_layer
 
@@ -148,10 +123,11 @@ class TransformerBase(nn.Module):
                 self.load_layer_weights(0, None, load_first = True, load_last=False, load_kernel = False, kernel_id=None)
                 print(f">>>> Load weights for embeddings layer ")
 
+        current_layer_idx = self.start_layer
+
         ## first ununit part 
         if self.start_layer %4 != 1 or (self.start_layer+3 > self.end_layer):
-            self.has_first_ununit = True
-            print(">>>> For the first model part, load weight is {self.load_weight}:")
+            print(f">>>> For the first model part, load weight is {self.load_weight}:")
             for i in range(self.start_layer, min(self.end_layer, math.ceil(self.start_layer/4)*4)+1):
                 print(f"    Load the {i%4}-th operation ({operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
                 layer = self._build_kernel(i%4, math.ceil(i/4)-1, self.load_weight)
@@ -160,25 +136,23 @@ class TransformerBase(nn.Module):
                 self.first_ops.append(layer)
                 del layer
                 gc.collect()
-            self.current_layer_idx = min(self.end_layer+1, math.ceil(self.start_layer/4)*4+1)
+            current_layer_idx = min(self.end_layer+1, math.ceil(self.start_layer/4)*4+1)
 
         ## mid unit part, the whole vit_layer
-        while self.current_layer_idx + 3 <= self.end_layer:
-            self.has_mid_unit = True
+        while current_layer_idx + 3 <= self.end_layer:
             layer = ViTLayer(self.config)
             if self.load_weight:
-                layer = self.load_layer_weights(math.ceil(self.current_layer_idx/4)-1, layer)
+                layer = self.load_layer_weights(math.ceil(current_layer_idx/4)-1, layer)
             self.vit_layers.append(layer)
             del layer
             gc.collect()
-            print(f">>>> Load the {math.ceil(self.current_layer_idx/4)-1}-th ViT Layer, load weight is {self.load_weight}")
-            self.current_layer_idx += 4
+            print(f">>>> Load the {math.ceil(current_layer_idx/4)-1}-th ViT Layer, load weight is {self.load_weight}")
+            current_layer_idx += 4
         
         ## last unit part
-        if self.end_layer >= self.current_layer_idx:
-            print(">>>> For the last model part, load weight is {self.load_weight}:")
-        for i in range(self.current_layer_idx, self.end_layer+1):
-            self.has_last_ununit = True
+        if self.end_layer >= current_layer_idx:
+            print(f">>>> For the last model part, load weight is {self.load_weight}:")
+        for i in range(current_layer_idx, self.end_layer+1):
             print(f"    Load the {i%4}-th operation ({operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
             layer = self._build_kernel(i%4, math.ceil(i/4)-1, self.load_weight)
             if self.load_weight:
@@ -371,17 +345,16 @@ class TransformerBase(nn.Module):
                 x = self.embeddings(x)
                 skip = x
 
-            if self.has_first_ununit:
-                for i in range(len(self.first_ops)):
-                    x, skip = self.forward_kernel(self.first_ops[i], x, skip, (self.start_layer+i)%4)
+            for i, op in enumerate(self.first_ops):
+                x, skip = self.forward_kernel(op, x, skip, (self.start_layer+i)%4)
 
-            for i, layer in enumerate(self.vit_layers):
+            for layer in self.vit_layers:
                 x = layer(x)[0]
                 skip = x
 
-            if self.has_last_ununit:
-                for i in range(len(self.last_ops)):
-                    x, skip = self.forward_kernel(self.last_ops[i], x, skip, (self.current_layer_idx+i)%4)
+            for i, op in enumerate(self.last_ops):
+                # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with load_layer_weights()
+                x, skip = self.forward_kernel(op, x, skip, (i+1)%4)
 
             if self.is_last:
                 x = self.layernorm(x)
@@ -414,21 +387,14 @@ def _create_transformershard(class_name, rank, model_name, is_first, is_last, st
     return TransformerShardCls
 
 
-_shard_class = [f'TransformerShard{i+1}' for i in range(total_rank)]
-
-rank_t = 0
 shard_class_list = []
-for _name in _shard_class:
-    if total_rank == 1:
-        globals()[_name] = _create_transformershard(_name, rank_t, model_name, True, True, partition[2*rank_t], partition[2*rank_t+1], True )
-    elif rank_t == 0:
-        globals()[_name] = _create_transformershard(_name, rank_t, model_name, True, False, partition[2*rank_t], partition[2*rank_t+1], True )
-    elif rank_t == total_rank-1:
-        globals()[_name] = _create_transformershard(_name, rank_t, model_name, False, True, partition[2*rank_t], partition[2*rank_t+1], True )
-    else:
-        globals()[_name] = _create_transformershard(_name, rank_t, model_name, False, False, partition[2*rank_t], partition[2*rank_t+1], True )
-    shard_class_list.append(eval(_name))
-    rank_t += 1
+for rank in range(total_rank):
+    _name = f'TransformerShard{rank+1}'
+    _is_first = rank == 0
+    _is_last = rank == total_rank-1
+    _shard_cls = _create_transformershard(_name, rank, model_name, _is_first, _is_last, partition[2*rank], partition[2*rank+1], True)
+    shard_class_list.append(_shard_cls)
+    globals()[_name] = _shard_cls
 
 
 #########################################################
@@ -440,33 +406,17 @@ class DistTransformer(nn.Module):
         self.num_split = num_split
         self.rref_list = []
         for i in range(total_rank):
-            exec(f"self.p{i+1}_rref= rpc.remote(workers[{i}],shard_class_list[{i}])")
-            self.rref_list.append(eval(f"self.p{i+1}_rref"))
+            rref = rpc.remote(workers[i], shard_class_list[i])
+            self.rref_list.append(rref)
 
     def forward(self, xs):
         out_futures = []
         for x in iter(xs.split(self.num_split, dim=0)):
             x_rref = RRef(x)
-            for i in range(total_rank):
-                if i == total_rank-1:
-                    y_rref = self.rref_list[i].rpc_async().forward(x_rref)
-                elif i == 0:
-                    x_rref = self.rref_list[i].remote().forward(x_rref)
-                else:
-                    x_rref = self.rref_list[i].remote().forward(x_rref)
+            for i in range(total_rank-1):
+                x_rref = self.rref_list[i].remote().forward(x_rref)
+            y_rref = self.rref_list[total_rank-1].rpc_async().forward(x_rref)
 
-                # if i == 0:
-                #     y_rref = self.rref_list[i].remote().forward(x_rref)
-                # elif i == total_rank-1:
-                #     y_rref = self.rref_list[i].rpc_async().forward(y_rref)
-                     
-                # else:
-                #     y_rref = self.rref_list[i].remote().forward(y_rref)
-                # rref_info = _rref_context_get_debug_info()
-                # debug_info = _get_debug_info()
-                # print(f"rref info {rref_info}")
-                # print(f"debug info {debug_info}")
-            # y_rref.to_here()
             x_rref.to_here()
             del x_rref
             out_futures.append(y_rref)
@@ -499,7 +449,7 @@ def run_master(split_size):
         for i in range(num_batches):
             # generate random inputs and labels       
             outputs = model(inputs['pixel_values'])
-            # print(f"outputs is {outputs}")
+            print(f"outputs is {outputs}")
             del outputs
             gc.collect()
             # predicted_class_idx = outputs[0].argmax(-1).item()
@@ -559,38 +509,9 @@ def run_worker(rank, world_size, num_split):
     rpc.shutdown()
 
 if __name__=="__main__":
-    # parser = argparse.ArgumentParser(description='EdgePipe System')
-    # parser.add_argument('-r', '--rank', type=int, required=True, help='node rank')
-    # parser.add_argument('-t','--total-rank', type=int, required=True, help='Total rank numbers')
-    # parser.add_argument('--device', type=str, default='cpu',
-    #                     help='Device for inference (cpu (default) or cuda)')
-    # parser.add_argument('--batch-size', type=int, default=64,
-    #                     help='input batch size (default: 64)')
-    # parser.add_argument('--num-batches', type=int, default=1,
-    #                     help='the number of batches (default: 1)')
-    # parser.add_argument('--num-worker-threads', type=int, default=64,
-    #                     help='for RPC backend worker threads (default: 64)')
-    # parser.add_argument('--MASTER-ADDR', type=str, default='127.0.0.1',
-    #                     help='127.0.0.1 (default)')
-    # parser.add_argument('--MASTER-PORT', type=str, default='29501',
-    #                     help='master port, default: 29501')
-    # parser.add_argument('--SOCKET-IFNAME', type=str, default='lo0',
-    #                     help='socket ifname, default: lo0')
-    # parser.add_argument('--parallel-threads', type=int, default=2,
-    #                     help='parallel threads, default: 2')
-    # parser.add_argument('-p', '--partition', type=int, nargs='+', required=True,
-    #                     help='partition method, eg: -p 1 24 25 48')
-    # parser.add_argument('-s', '--split', nargs='+', type=int, default=8, help='the list of split size, eg: -s 6 8 is split=[6,8]')
-
-    # parser.add_argument('--model-name', type=str, default='google/vit-base-patch16-224',
-    #                     help='model for pipeline, default is google/vit-base-patch16-224,[google/vit-large-patch16-224], [google/vit-huge-patch14-224-in21k]')
-    
-    # args = parser.parse_args()
-    # world_size = args.total_rank #otal_rank
-    # rank=args.rank #int(sys.argv[1])
-    # num_split= args.split
-    # partition = args.partition
-    print(f"partition is {partition}, rank is {rank}")
+    world_size = total_rank
+    rank=args.rank
+    num_split= splits
 
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
     
