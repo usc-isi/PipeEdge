@@ -6,6 +6,7 @@ import threading
 import psutil
 import requests
 import time
+import argparse
 import torch
 from math import floor
 import numpy as np
@@ -22,12 +23,28 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 #########################################################
 #                 Check Enviroment Settings             #
 #########################################################
-
+parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime")
+parser.add_argument("rank", type=int, help="the rank for the current node")
+parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
+parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224", choices=["google/vit-base-patch16-224", 
+"google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k"], help="the neural network model for loading")
+parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
+parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
+parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
+parser.add_argument("-s", "--socket-ifname", type=str, default="lo0", help="socket iframe name, use [ifconfig | ipaddress] to check")
+parser.add_argument("-p","--print", type=str, default = "None", choices=["full", "short", "default"], help="print the [full | short] tensor values")
+parser.add_argument("-t", "--threshold", default=1000, type=int, help="total number of array elements which trigger summarization rather than full repr")
+parser.add_argument("-n", "--num-batches", default=1, type=int, help="total number of batches")
+parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
+parser.add_argument("-w", "--worker-threads", default=64, type=int, help="the number of worker threads for the communication backend")
+parser.add_argument("-sp", "--splits", default="8", help="the list of microbatch size")
+args = parser.parse_args()
+torch.set_printoptions(profile=args.print,threshold=args.threshold)  
 ## Force pytorch use CPU
 device = torch.device('cpu')
-MASTER_ADDR = '127.0.0.1' #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
-MASTER_PORT = '29501'
-SOCKET_IFNAME = "lo0"
+MASTER_ADDR = args.addr 
+MASTER_PORT = args.port
+SOCKET_IFNAME = args.socket_ifname
 # parallel_threads = 2
 # torch.set_num_threads(parallel_threads)
 # torch.set_num_interop_threads(parallel_threads)
@@ -37,19 +54,14 @@ process = psutil.Process(os.getpid())
 #########################################################
 #                 Configuration for Network             #
 #########################################################
-
 # *****  Define the World Size and partition Method ******#
-
-# 'google/vit-base-patch16-224'
-# 'google/vit-large-patch16-224'
-# 'google/vit-huge-patch14-224-in21k'
-model_name= 'google/vit-base-patch16-224'
-total_rank = 1
-partition =   [1, 48]  
-num_batches = 1
-batch_size = 64
-num_worker_threads = 64
-splits = [6]
+model_name= args.model_name
+total_rank = args.worldsize
+partition =   [int(i) for i in args.partition.split(',')]
+num_batches = args.num_batches
+batch_size = args.batch_size
+num_worker_threads = args.worker_threads
+splits = [int(i) for i in args.splits.split(',')] 
 operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
 ## random data
 # img = torch.randn(3, 384, 384)
@@ -437,7 +449,7 @@ def run_master(split_size):
         for i in range(num_batches):
             # generate random inputs and labels       
             outputs = model(inputs['pixel_values'])
-            # print(f"outputs is {outputs}")
+            print(f"outputs is {outputs}")
             del outputs
             gc.collect()
             # predicted_class_idx = outputs[0].argmax(-1).item()
@@ -498,7 +510,7 @@ def run_worker(rank, world_size, num_split):
 
 if __name__=="__main__":
     world_size = total_rank
-    rank=int(sys.argv[1])
+    rank=args.rank
     num_split= splits
 
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
