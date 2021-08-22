@@ -26,7 +26,7 @@ start = time.time()
 for i in range(num_batch):
     print(f"Start processing {i} batch")  
     outputs = model(**inputs)
-    # print(outputs)
+    print(outputs)
 end = time.time()
 print(f"Exec time is {end-start}, throughput is {(num_batch*batch_size)/(end-start)}")
 last_hidden_states = outputs.last_hidden_state

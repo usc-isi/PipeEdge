@@ -8,7 +8,7 @@ import gc
 
 url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
 num_threads = 2
-batch_size = 7
+batch_size = 1
 measure_times = 1
 layer_id = 11
 torch.set_num_threads(num_threads)
@@ -112,8 +112,8 @@ class MeasureViTModel(nn.Module):
         return self.time
 
 
-for layer_id in range(0,12):
-    vit_measure = MeasureViTModel()
-    time_statics = vit_measure(**inputs)
+# for layer_id in range(0,12):
+vit_measure = MeasureViTModel()
+time_statics = vit_measure(**inputs)
 
 
