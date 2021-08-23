@@ -76,9 +76,9 @@ imgs = [image for i in range(batch_size)]
 #########################################################
 #           Define Model Parallel Transformer           #
 #########################################################
-class TransformerBase(nn.Module):
+class TransformerShard(nn.Module):
     def __init__(self, rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
-        super(TransformerBase, self).__init__()
+        super(TransformerShard, self).__init__()
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
         print(f">>>> Model name {model_name}")
@@ -386,7 +386,7 @@ class DistTransformer(nn.Module):
             # Build Transformer Shard
             is_first = i == 0
             is_last = i == total_rank-1
-            rref = rpc.remote(workers[i], TransformerBase, args=(i, model_name, is_first, is_last, partition[2*i], partition[2*i+1], True))
+            rref = rpc.remote(workers[i], TransformerShard, args=(i, model_name, is_first, is_last, partition[2*i], partition[2*i+1], True))
             self.rref_list.append(rref)
 
     def forward(self, xs):
