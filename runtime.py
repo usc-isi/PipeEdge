@@ -375,38 +375,18 @@ class TransformerBase(nn.Module):
 
 
 #########################################################
-#                Build Transformer Shard                #
-#########################################################
-
-## Class factory
-def _create_transformershard(class_name, rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
-    class TransformerShardCls(TransformerBase):
-        def __init__(self):
-            super(TransformerShardCls, self).__init__(rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True)
-    TransformerShardCls.__qualname__ = class_name
-    return TransformerShardCls
-
-
-shard_class_list = []
-for rank in range(total_rank):
-    _name = f'TransformerShard{rank+1}'
-    _is_first = rank == 0
-    _is_last = rank == total_rank-1
-    _shard_cls = _create_transformershard(_name, rank, model_name, _is_first, _is_last, partition[2*rank], partition[2*rank+1], True)
-    shard_class_list.append(_shard_cls)
-    globals()[_name] = _shard_cls
-
-
-#########################################################
 #             Stitch Shards into one Module             #
 #########################################################
 class DistTransformer(nn.Module):
-    def __init__(self, model_name, num_split, workers, *args, **kwargs):
+    def __init__(self, model_name, num_split, workers):
         super(DistTransformer, self).__init__()
         self.num_split = num_split
         self.rref_list = []
         for i in range(total_rank):
-            rref = rpc.remote(workers[i], shard_class_list[i])
+            # Build Transformer Shard
+            is_first = i == 0
+            is_last = i == total_rank-1
+            rref = rpc.remote(workers[i], TransformerBase, args=(i, model_name, is_first, is_last, partition[2*i], partition[2*i+1], True))
             self.rref_list.append(rref)
 
     def forward(self, xs):
