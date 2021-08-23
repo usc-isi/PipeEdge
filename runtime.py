@@ -456,25 +456,15 @@ def run_worker(model_name, rank, world_size, num_split):
     # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
     options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=num_worker_threads,rpc_timeout=3000)
 
-
+    rpc.init_rpc(
+        f"worker{rank}",
+        rank=rank,
+#         backend=rpc.BackendType.PROCESS_GROUP,
+        world_size=world_size,
+        rpc_backend_options=options
+    )
     if rank == 0:
-        rpc.init_rpc(
-            "worker0",
-            rank=rank,
-   #         backend=rpc.BackendType.PROCESS_GROUP,
-            world_size=world_size,
-            rpc_backend_options=options
-        )
         run_master(model_name, world_size, num_split)
-    else:
-        rpc.init_rpc(
-            f"worker{rank}",
-            rank=rank,
-   #         backend=rpc.BackendType.PROCESS_GROUP,
-            world_size=world_size,
-            rpc_backend_options=options
-        )
-        pass
 
     # block until all rpcs finisha
     rpc.shutdown()
