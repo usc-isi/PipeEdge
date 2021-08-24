@@ -128,8 +128,6 @@ class TransformerShard(nn.Module):
             for i in range(self.start_layer, min(self.end_layer, math.ceil(self.start_layer/4)*4)+1):
                 print(f"    Load the {i%4}-th operation ({operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
                 layer = self._build_kernel(i%4, math.ceil(i/4)-1, self.load_weight)
-                if self.load_weight:
-                    layer = self.load_layer_weights(math.ceil(i/4)-1, layer, False, False, True, i%4)
                 self.first_ops.append(layer)
                 del layer
                 gc.collect()
