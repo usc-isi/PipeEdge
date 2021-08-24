@@ -17,12 +17,18 @@ pip install transformers
 5. In node with Rank i, use command:
 
 ```sh
-python runtime.py i
+# for help
+python runtime.py -h
 ```
-eg. in rank 0:
+eg. in rank 0 for 2 stages:
 
 ```sh
-python runtime.py 0
+python runtime.py 0 2 -pt 1,24,25,48
+```
+in rank 1:
+
+```sh
+python runtime.py 1 2 -pt 1,24,25,48
 ```
 
 **Note: support operation level partition**
@@ -60,7 +66,8 @@ partition = [1, 4, 5,8, 9, 20, 21,48]
 - [x] Support fine-grained partitioning
 - [x] Add baseline.py   
 - [x] Operator-level partition method
-- [ ] Edit profile script
+- [x] Edit profile script
+- [x] Create a simulator 
 - [ ] Import profile to Partition
 - [ ] Edit Partition script
 - [ ] Import Partition to Runtime
