@@ -55,13 +55,10 @@ process = psutil.Process(os.getpid())
 #                 Configuration for Network             #
 #########################################################
 # *****  Define the World Size and partition Method ******#
-model_name= args.model_name
-total_rank = args.worldsize
 partition =   [int(i) for i in args.partition.split(',')]
 num_batches = args.num_batches
 batch_size = args.batch_size
 num_worker_threads = args.worker_threads
-splits = [int(i) for i in args.splits.split(',')] 
 operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
 ## random data
 # img = torch.randn(3, 384, 384)
@@ -76,9 +73,9 @@ imgs = [image for i in range(batch_size)]
 #########################################################
 #           Define Model Parallel Transformer           #
 #########################################################
-class TransformerBase(nn.Module):
+class TransformerShard(nn.Module):
     def __init__(self, rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
-        super(TransformerBase, self).__init__()
+        super(TransformerShard, self).__init__()
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
         print(f">>>> Model name {model_name}")
@@ -131,8 +128,6 @@ class TransformerBase(nn.Module):
             for i in range(self.start_layer, min(self.end_layer, math.ceil(self.start_layer/4)*4)+1):
                 print(f"    Load the {i%4}-th operation ({operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
                 layer = self._build_kernel(i%4, math.ceil(i/4)-1, self.load_weight)
-                if self.load_weight:
-                    layer = self.load_layer_weights(math.ceil(i/4)-1, layer, False, False, True, i%4)
                 self.first_ops.append(layer)
                 del layer
                 gc.collect()
@@ -375,47 +370,28 @@ class TransformerBase(nn.Module):
 
 
 #########################################################
-#                Build Transformer Shard                #
-#########################################################
-
-## Class factory
-def _create_transformershard(class_name, rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
-    class TransformerShardCls(TransformerBase):
-        def __init__(self):
-            super(TransformerShardCls, self).__init__(rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True)
-    TransformerShardCls.__qualname__ = class_name
-    return TransformerShardCls
-
-
-shard_class_list = []
-for rank in range(total_rank):
-    _name = f'TransformerShard{rank+1}'
-    _is_first = rank == 0
-    _is_last = rank == total_rank-1
-    _shard_cls = _create_transformershard(_name, rank, model_name, _is_first, _is_last, partition[2*rank], partition[2*rank+1], True)
-    shard_class_list.append(_shard_cls)
-    globals()[_name] = _shard_cls
-
-
-#########################################################
 #             Stitch Shards into one Module             #
 #########################################################
 class DistTransformer(nn.Module):
-    def __init__(self, model_name, num_split, workers, *args, **kwargs):
+    def __init__(self, model_name, world_size, num_split):
         super(DistTransformer, self).__init__()
+        self.world_size = world_size
         self.num_split = num_split
         self.rref_list = []
-        for i in range(total_rank):
-            rref = rpc.remote(workers[i], shard_class_list[i])
+        for i in range(world_size):
+            # Build Transformer Shard
+            is_first = i == 0
+            is_last = i == world_size-1
+            rref = rpc.remote(f"worker{i}", TransformerShard, args=(i, model_name, is_first, is_last, partition[2*i], partition[2*i+1], True))
             self.rref_list.append(rref)
 
     def forward(self, xs):
         out_futures = []
         for x in iter(xs.split(self.num_split, dim=0)):
             x_rref = RRef(x)
-            for i in range(total_rank-1):
+            for i in range(self.world_size-1):
                 x_rref = self.rref_list[i].remote().forward(x_rref)
-            y_rref = self.rref_list[total_rank-1].rpc_async().forward(x_rref)
+            y_rref = self.rref_list[self.world_size-1].rpc_async().forward(x_rref)
 
             x_rref.to_here()
             del x_rref
@@ -425,25 +401,20 @@ class DistTransformer(nn.Module):
         return torch.cat(torch.futures.wait_all(out_futures))
 
 
-
 #########################################################
 #                   Run RPC Processes                   #
 #########################################################
 
-latencies = []
-throughputs = []
-
-feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
-
-def run_master(split_size):
-    # put the two model parts on worker1 and worker2 respectively
+def run_master(model_name, world_size, split_size):
     print("Run mastering \n")
-    work_list = [f"worker{i}" for i in range(total_rank)]
+    latencies = []
+    throughputs = []
+    feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
     ## for verification 
     # origin_model = ViTForImageClassification.from_pretrained(model_name)
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
-        model =  DistTransformer(model_name, split_size[si], work_list)
+        model =  DistTransformer(model_name, world_size, split_size[si])
         inputs = feature_extractor(images=imgs, return_tensors="pt")
         tik = time.time()
         for i in range(num_batches):
@@ -471,11 +442,9 @@ def run_master(split_size):
             best_choice = i 
     print("\n---------------- Split output line ----------------")
     print(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
-    
-   
 
 
-def run_worker(rank, world_size, num_split):
+def run_worker(model_name, rank, world_size, num_split):
 
     os.environ['MASTER_ADDR'] = MASTER_ADDR #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
     os.environ['MASTER_PORT'] = MASTER_PORT
@@ -485,37 +454,28 @@ def run_worker(rank, world_size, num_split):
     # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
     options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=num_worker_threads,rpc_timeout=3000)
 
-
+    rpc.init_rpc(
+        f"worker{rank}",
+        rank=rank,
+#         backend=rpc.BackendType.PROCESS_GROUP,
+        world_size=world_size,
+        rpc_backend_options=options
+    )
     if rank == 0:
-        rpc.init_rpc(
-            "worker0",
-            rank=rank,
-   #         backend=rpc.BackendType.PROCESS_GROUP,
-            world_size=world_size,
-            rpc_backend_options=options
-        )
-        run_master(num_split)
-    else:
-        rpc.init_rpc(
-            f"worker{rank}",
-            rank=rank,
-   #         backend=rpc.BackendType.PROCESS_GROUP,
-            world_size=world_size,
-            rpc_backend_options=options
-        )
-        pass
+        run_master(model_name, world_size, num_split)
 
     # block until all rpcs finisha
     rpc.shutdown()
 
 if __name__=="__main__":
-    world_size = total_rank
+    world_size = args.worldsize
     rank=args.rank
-    num_split= splits
+    num_split = [int(i) for i in args.splits.split(',')]
+    model_name= args.model_name
 
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
     
     tik = time.time()
-    run_worker(rank, world_size, num_split)
+    run_worker(model_name, rank, world_size, num_split)
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")
