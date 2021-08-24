@@ -31,6 +31,8 @@ class ProfileTransformer(nn.Module):
         self.total_batch = 0
         self.start_layer=1
         self.profile_time = []
+        self.transfer_data_shape = []
+        self.record_kernel_3 = True
 
         ## operations/transformer layers set
         self.ops = nn.ModuleList()
@@ -175,6 +177,10 @@ class ProfileTransformer(nn.Module):
         elif kernel_id == 3:
             x = layer[0](x)
             x = layer[1](x)
+            if self.record_kernel_3:
+                a,b,c=x.shape
+                self.transfer_data_shape.append(a*b*c)
+                self.record_kernel_3 = False
         else:
             x = layer[0](x, skip)
             skip = x
@@ -185,10 +191,13 @@ class ProfileTransformer(nn.Module):
 
     @torch.no_grad()
     def forward(self, x):
+        
         with self._lock:
             start = time.time()
             x = self.embeddings(x)
             skip = x
+            a,b,c = x.shape
+            self.transfer_data_shape.append(a*b*c)
             for i, op in enumerate(self.ops):
                 x, skip = self.forward_kernel(op, x, skip, i)
             x = self.layernorm(x)
@@ -196,12 +205,12 @@ class ProfileTransformer(nn.Module):
             end = time.time()
 
         self.total_time +=  (end - start)
-        return self.profile_time, end-start
+        return self.profile_time, end-start,self.transfer_data_shape
 
 if __name__=="__main__":
     batch_size = 8     
     model_name = "google/vit-base-patch16-224" 
     model = ProfileTransformer(model_name)
     inputs = torch.randn(batch_size,3,224,224)
-    time_p, total_time = model(inputs)
-    print(f"time is {time_p}, total_time is {total_time}")
+    time_p, total_time,data_shape = model(inputs)
+    print(f"time is {time_p}, total_time is {total_time}, data shape is {data_shape}")
