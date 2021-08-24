@@ -42,9 +42,6 @@ args = parser.parse_args()
 torch.set_printoptions(profile=args.print,threshold=args.threshold)  
 ## Force pytorch use CPU
 device = torch.device('cpu')
-MASTER_ADDR = args.addr 
-MASTER_PORT = args.port
-SOCKET_IFNAME = args.socket_ifname
 # parallel_threads = 2
 # torch.set_num_threads(parallel_threads)
 # torch.set_num_interop_threads(parallel_threads)
@@ -446,10 +443,10 @@ def run_master(model_name, world_size, split_size):
 
 def run_worker(model_name, rank, world_size, num_split):
 
-    os.environ['MASTER_ADDR'] = MASTER_ADDR #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
-    os.environ['MASTER_PORT'] = MASTER_PORT
-    os.environ["TP_SOCKET_IFNAME"] = SOCKET_IFNAME
-    os.environ["GLOO_SOCKET_IFNAME"] = SOCKET_IFNAME
+    os.environ['MASTER_ADDR'] = args.addr #MASTER_ADDR #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
+    os.environ['MASTER_PORT'] = args.port # MASTER_PORT
+    os.environ["TP_SOCKET_IFNAME"] = args.socket_ifname #SOCKET_IFNAME
+    os.environ["GLOO_SOCKET_IFNAME"] = args.socket_ifname #SOCKET_IFNAME
 
     # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
     options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=num_worker_threads,rpc_timeout=3000)
