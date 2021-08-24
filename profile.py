@@ -18,7 +18,7 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings,  ViTSelfAttentio
 process = psutil.Process(os.getpid())
 operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
 class ProfileTransformer(nn.Module):
-    def __init__(self, model_name):
+    def __init__(self, model_name, repeat_time=10):
         super(ProfileTransformer, self).__init__()
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
@@ -30,9 +30,9 @@ class ProfileTransformer(nn.Module):
         self.total_time = 0
         self.total_batch = 0
         self.start_layer=1
-        self.profile_time = []
         self.transfer_data_shape = []
         self.record_kernel_3 = True
+        self.repeat_time = repeat_time
 
         ## operations/transformer layers set
         self.ops = nn.ModuleList()
@@ -46,6 +46,7 @@ class ProfileTransformer(nn.Module):
         elif self.model_name == 'google/vit-huge-patch14-224-in21k':
             self.weights_file_name = 'ViT-H_14.npz'
             self.end_layer = 128
+        self.profile_time = [0]*self.end_layer
         self._make_layer()
 
     
@@ -170,42 +171,56 @@ class ProfileTransformer(nn.Module):
         if kernel_id == 1:
             x = layer[0](x)
             x = layer[1](x)[0]
+            if self.record_kernel_3:
+                a,b,c=x.shape
+                self.transfer_data_shape.append(a*b*c)
+            
         elif kernel_id == 2:
             x = layer[0](x, skip)
             x += skip
             skip = x
+            if self.record_kernel_3:
+                a,b,c=x.shape
+                self.transfer_data_shape.append(a*b*c)
         elif kernel_id == 3:
             x = layer[0](x)
             x = layer[1](x)
             if self.record_kernel_3:
                 a,b,c=x.shape
-                self.transfer_data_shape.append(a*b*c)
-                self.record_kernel_3 = False
+                self.transfer_data_shape.append(a*b*c)        
         else:
             x = layer[0](x, skip)
             skip = x
+            if self.record_kernel_3:
+                a,b,c=x.shape
+                self.transfer_data_shape.append(a*b*c)
+                self.record_kernel_3 = False
         end_kernel = time.time()
-        self.profile_time.append(end_kernel-start_kernel)
+        self.profile_time[i] += (end_kernel-start_kernel)
         return x, skip
 
 
     @torch.no_grad()
-    def forward(self, x):
-        
-        with self._lock:
+    def forward(self, data):
+        for iter in range(self.repeat_time):
             start = time.time()
-            x = self.embeddings(x)
+            x = self.embeddings(data)
+            emb_time = time.time() - start
+            self.profile_time[0] += emb_time
             skip = x
-            a,b,c = x.shape
-            self.transfer_data_shape.append(a*b*c)
             for i, op in enumerate(self.ops):
                 x, skip = self.forward_kernel(op, x, skip, i)
+            tmp_1 = time.time()
             x = self.layernorm(x)
             x = self.classifier(x[:, 0, :])
+            self.profile_time[self.end_layer-1] += time.time()-tmp_1
             end = time.time()
-
-        self.total_time +=  (end - start)
-        return self.profile_time, end-start,self.transfer_data_shape
+            self.total_time +=  (end - start)
+            print(f">>>> Finish profile {iter+1}/{self.repeat_time}, time is {end - start}")
+        self.profile_time = [i/self.repeat_time for i in self.profile_time]
+        print(f">>>> Sum kernel time is {sum(self.profile_time)}")
+        self.total_time /= self.repeat_time
+        return self.profile_time, self.total_time,self.transfer_data_shape
 
 if __name__=="__main__":
     batch_size = 8     
