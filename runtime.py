@@ -21,53 +21,6 @@ from transformers import AutoConfig, ViTFeatureExtractor, ViTForImageClassificat
 from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput,ViTIntermediate, ViTOutput
 
 #########################################################
-#                 Check Enviroment Settings             #
-#########################################################
-parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime")
-parser.add_argument("rank", type=int, help="the rank for the current node")
-parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
-parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224", choices=["google/vit-base-patch16-224", 
-"google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k"], help="the neural network model for loading")
-parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
-parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
-parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
-parser.add_argument("-s", "--socket-ifname", type=str, default="lo0", help="socket iframe name, use [ifconfig | ipaddress] to check")
-parser.add_argument("-p","--print", type=str, default = "None", choices=["full", "short", "default"], help="print the [full | short] tensor values")
-parser.add_argument("-t", "--threshold", default=1000, type=int, help="total number of array elements which trigger summarization rather than full repr")
-parser.add_argument("-n", "--num-batches", default=1, type=int, help="total number of batches")
-parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
-parser.add_argument("-w", "--worker-threads", default=64, type=int, help="the number of worker threads for the communication backend")
-parser.add_argument("-sp", "--splits", default="8", help="the list of microbatch size")
-args = parser.parse_args()
-torch.set_printoptions(profile=args.print,threshold=args.threshold)  
-## Force pytorch use CPU
-device = torch.device('cpu')
-# parallel_threads = 2
-# torch.set_num_threads(parallel_threads)
-# torch.set_num_interop_threads(parallel_threads)
-torch.set_grad_enabled(False)
-print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
-process = psutil.Process(os.getpid())
-#########################################################
-#                 Configuration for Network             #
-#########################################################
-# *****  Define the World Size and partition Method ******#
-partition =   [int(i) for i in args.partition.split(',')]
-num_batches = args.num_batches
-batch_size = args.batch_size
-num_worker_threads = args.worker_threads
-operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
-## random data
-# img = torch.randn(3, 384, 384)
-## ground truth: Egyptian cat
-url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
-image = Image.open(requests.get(url, stream=True).raw)
-# image = Image.open('./images/panda.jpeg')
-imgs = [image for i in range(batch_size)]
-
-# ***********************  End  **************************#
-
-#########################################################
 #           Define Model Parallel Transformer           #
 #########################################################
 class TransformerShard(nn.Module):
@@ -106,7 +59,6 @@ class TransformerShard(nn.Module):
             print(f">>>> Load weight file f{self.weights_file_name}")
         self._make_layer()
         print(f"======= Finish Build TransformerShard{self.rank} ==========")
-        gc.collect()
     
     def _make_layer(self):
         ## first Shard
@@ -126,8 +78,6 @@ class TransformerShard(nn.Module):
                 print(f"    Load the {i%4}-th operation ({operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
                 layer = self._build_kernel(i%4, math.ceil(i/4)-1, self.load_weight)
                 self.first_ops.append(layer)
-                del layer
-                gc.collect()
             current_layer_idx = min(self.end_layer+1, math.ceil(self.start_layer/4)*4+1)
 
         ## mid unit part, the whole vit_layer
@@ -136,8 +86,6 @@ class TransformerShard(nn.Module):
             if self.load_weight:
                 layer = self.load_layer_weights(math.ceil(current_layer_idx/4)-1, layer)
             self.vit_layers.append(layer)
-            del layer
-            gc.collect()
             print(f">>>> Load the {math.ceil(current_layer_idx/4)-1}-th ViT Layer, load weight is {self.load_weight}")
             current_layer_idx += 4
         
@@ -150,8 +98,6 @@ class TransformerShard(nn.Module):
             if self.load_weight:
                 layer = self.load_layer_weights(math.ceil(i/4)-1, layer, False, False, True, i%4)
             self.last_ops.append(layer)
-            del layer
-            gc.collect()
         
         ## last Shard
         if self.is_last:
@@ -261,7 +207,7 @@ class TransformerShard(nn.Module):
                     transformer_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
                     transformer_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
                     print(f"memory {process.memory_info().rss // 1000000} MB")
-                    del query_weight, key_weight, value_weight, query_bias, key_bias, value_bias, mlp_weight_0, mlp_weight_1,mlp_bias_0, mlp_bias_1
+                   
                 elif kernel_id == 1:
 
                     query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
@@ -281,13 +227,11 @@ class TransformerShard(nn.Module):
                     transformer_layer[1].query.bias.copy_(query_bias)
                     transformer_layer[1].key.bias.copy_(key_bias)
                     transformer_layer[1].value.bias.copy_(value_bias)
-                    del query_weight, key_weight, value_weight, query_bias, key_bias, value_bias
                 elif kernel_id == 2:
                     out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                     out_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "bias")]).view(-1)
                     transformer_layer[0].dense.weight.copy_(out_weight)
                     transformer_layer[0].dense.bias.copy_(out_bias)
-                    del out_weight, out_bias
                 elif kernel_id == 3:
                     transformer_layer[0].weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
                     transformer_layer[0].bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
@@ -295,16 +239,12 @@ class TransformerShard(nn.Module):
                     mlp_bias_0 = torch.from_numpy(weights[os.path.join(ROOT, FC_0, "bias")]).t()
                     transformer_layer[1].dense.weight.copy_(mlp_weight_0)
                     transformer_layer[1].dense.bias.copy_(mlp_bias_0)
-                    del mlp_weight_0, mlp_bias_0
                 elif kernel_id == 0:
                     mlp_weight_1 = torch.from_numpy(weights[os.path.join(ROOT, FC_1, "kernel")]).t()
                     mlp_bias_1 = torch.from_numpy(weights[os.path.join(ROOT, FC_1, "bias")]).t()
                     transformer_layer[0].dense.weight.copy_(mlp_weight_1)
                     transformer_layer[0].dense.bias.copy_(mlp_bias_1)
-                    del mlp_weight_1, mlp_bias_1
 
-        del weights
-        gc.collect()
         return transformer_layer
     
     def forward_kernel(self, layer, x, skip, kernel_id):
@@ -330,7 +270,6 @@ class TransformerShard(nn.Module):
             x = x_rref.to_here()
         else:
             x, skip = x_rref.to_here()
-        del x_rref
         with self._lock:
             start = time.time()
             if self.is_first:
@@ -359,7 +298,6 @@ class TransformerShard(nn.Module):
         print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         if self.is_last:
             return x
-        gc.collect()
         return x, skip
 
     def parameter_rrefs(self):
@@ -391,10 +329,7 @@ class DistTransformer(nn.Module):
             y_rref = self.rref_list[self.world_size-1].rpc_async().forward(x_rref)
 
             x_rref.to_here()
-            del x_rref
             out_futures.append(y_rref)
-            del y_rref
-            gc.collect()
         return torch.cat(torch.futures.wait_all(out_futures))
 
 
@@ -418,15 +353,12 @@ def run_master(model_name, world_size, split_size):
             # generate random inputs and labels       
             outputs = model(inputs['pixel_values'])
             print(f"outputs is {outputs}")
-            del outputs
-            gc.collect()
             # predicted_class_idx = outputs[0].argmax(-1).item()
             # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
         ## Calculate time
         tok = time.time()
         latency = tok-tik
         throughput = num_batches*batch_size / latency
-        # print(f"Split size is {split_size[si]}, Total program execution time = {tok - tik}")
         latencies.append(latency)
         throughputs.append(throughput)
          
@@ -465,6 +397,52 @@ def run_worker(model_name, rank, world_size, num_split):
     rpc.shutdown()
 
 if __name__=="__main__":
+    #########################################################
+    #                 Check Enviroment Settings             #
+    #########################################################
+    parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime")
+    parser.add_argument("rank", type=int, help="the rank for the current node")
+    parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
+    parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224", choices=["google/vit-base-patch16-224", 
+    "google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k"], help="the neural network model for loading")
+    parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
+    parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
+    parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
+    parser.add_argument("-s", "--socket-ifname", type=str, default="lo0", help="socket iframe name, use [ifconfig | ipaddress] to check")
+    parser.add_argument("-p","--print", type=str, default = "None", choices=["full", "short", "default"], help="print the [full | short] tensor values")
+    parser.add_argument("-t", "--threshold", default=1000, type=int, help="total number of array elements which trigger summarization rather than full repr")
+    parser.add_argument("-n", "--num-batches", default=1, type=int, help="total number of batches")
+    parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
+    parser.add_argument("-w", "--worker-threads", default=64, type=int, help="the number of worker threads for the communication backend")
+    parser.add_argument("-sp", "--splits", default="8", help="the list of microbatch size")
+    args = parser.parse_args()
+    torch.set_printoptions(profile=args.print,threshold=args.threshold)  
+    ## Force pytorch use CPU
+    device = torch.device('cpu')
+    # parallel_threads = 2
+    # torch.set_num_threads(parallel_threads)
+    # torch.set_num_interop_threads(parallel_threads)
+    torch.set_grad_enabled(False)
+    print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
+    process = psutil.Process(os.getpid())
+    #########################################################
+    #                 Configuration for Network             #
+    #########################################################
+    # *****  Define the World Size and partition Method ******#
+    partition =   [int(i) for i in args.partition.split(',')]
+    num_batches = args.num_batches
+    batch_size = args.batch_size
+    num_worker_threads = args.worker_threads
+    operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
+    ## random data
+    # img = torch.randn(3, 384, 384)
+    ## ground truth: Egyptian cat
+    url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
+    image = Image.open(requests.get(url, stream=True).raw)
+    # image = Image.open('./images/panda.jpeg')
+    imgs = [image for i in range(batch_size)]
+
+    # ***********************  End  **************************#
     world_size = args.worldsize
     rank=args.rank
     num_split = [int(i) for i in args.splits.split(',')]
