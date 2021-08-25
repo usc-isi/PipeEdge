@@ -14,12 +14,13 @@ import torch.nn as nn
 import torch.distributed.autograd as dist_autograd
 import torch.distributed.rpc as rpc
 from transformers import AutoConfig
+from runtime import TransformerShard
 from transformers.models.vit.modeling_vit import ViTEmbeddings,  ViTSelfAttention, ViTSelfOutput,ViTIntermediate, ViTOutput
 process = psutil.Process(os.getpid())
 operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
-class ProfileTransformer(nn.Module):
+class ProfileTransformer(TransformerShard):
     def __init__(self, model_name, repeat_time=10):
-        super(ProfileTransformer, self).__init__()
+        super(ProfileTransformer, self).__init__(0, model_name, True, True, 1, 0, load_weight=True)
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
         print(f">>>> Profile Model {model_name}")      
@@ -67,104 +68,6 @@ class ProfileTransformer(nn.Module):
         self.classifier = nn.Linear(self.config.hidden_size, num_label) if self.config.num_labels > 0 else nn.Identity()
         self.load_layer_weights(0, None, load_first = False, load_last=True, load_kernel = False, kernel_id=None)
 
-
-
-    def _build_kernel(self, kernel_id, vit_layer_id, load_weight=True):
-        layers = nn.ModuleList()
-        if kernel_id == 1:
-            layers.append(nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps))
-            layers.append(ViTSelfAttention(self.config))
-        elif kernel_id == 2:
-            layers.append(ViTSelfOutput(self.config))
-        elif kernel_id == 3:
-            layers.append(nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps))
-            layers.append( ViTIntermediate(self.config))
-        else:
-            layers.append(ViTOutput(self.config))
-        if load_weight:
-            self.load_layer_weights(vit_layer_id, layers, False, False, load_weight, kernel_id)
-        return layers
-
-    def load_layer_weights(self, id, transformer_layer, load_first = False, load_last=False, load_kernel = False, kernel_id=None):
-        weights = np.load(self.weights_file_name)
-        ROOT = f"Transformer/encoderblock_{id}"
-        ATTENTION_Q = "MultiHeadDotProductAttention_1/query"
-        ATTENTION_K = "MultiHeadDotProductAttention_1/key"
-        ATTENTION_V = "MultiHeadDotProductAttention_1/value"
-        ATTENTION_OUT = "MultiHeadDotProductAttention_1/out"
-        FC_0 = "MlpBlock_3/Dense_0"
-        FC_1 = "MlpBlock_3/Dense_1"
-        ATTENTION_NORM = "LayerNorm_0"
-        MLP_NORM = "LayerNorm_2"
-        self.hidden_size = self.config.hidden_size
-        if load_first:
-            with torch.no_grad():
-                self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["Transformer/posembed_input/pos_embedding"])))
-                conv_weight = weights["embedding/kernel"]
-                O, I, J, K = conv_weight.shape
-                # print(f"conv_shape is {O, I, J, K}, pe weight shape is {self.embeddings.patch_embeddings.projection.weight.shape}")
-                # conv_weight = conv_weight.reshape(K,J,O,I)
-                conv_weight = conv_weight.transpose([3, 2, 0, 1])
-                self.embeddings.patch_embeddings.projection.weight.copy_(torch.from_numpy(conv_weight))
-                self.embeddings.patch_embeddings.projection.bias.copy_(torch.from_numpy(weights["embedding/bias"]))
-                # print(f">>>> Load embedding for the first shard")
-
-        if load_last:
-            with torch.no_grad():
-                self.layernorm.weight.copy_(torch.from_numpy(weights["Transformer/encoder_norm/scale"]))
-                self.layernorm.bias.copy_(torch.from_numpy(weights["Transformer/encoder_norm/bias"]))
-                head_kernel = np.transpose(weights["head/kernel"])  
-                # print(f"classifier weight is {self.classifier.weight.shape}, head kernel weight shape is {head_kernel.shape}")
-                self.classifier.weight.copy_(torch.from_numpy(head_kernel))
-                self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))  
-                # print(f">>>> Load Layernorm, classifier for the last shard")  
-
-
-        with torch.no_grad():
-            if kernel_id == 1:
-                query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-                key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-                value_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-
-                query_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "bias")]).view(-1)
-                key_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "bias")]).view(-1)
-                value_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "bias")]).view(-1)
-
-                transformer_layer[0].weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_NORM, "scale")]))
-                transformer_layer[0].bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_NORM, "bias")]))
-                transformer_layer[1].query.weight.copy_(query_weight)
-                transformer_layer[1].key.weight.copy_(key_weight)
-                transformer_layer[1].value.weight.copy_(value_weight)
-
-                transformer_layer[1].query.bias.copy_(query_bias)
-                transformer_layer[1].key.bias.copy_(key_bias)
-                transformer_layer[1].value.bias.copy_(value_bias)
-                del query_weight, key_weight, value_weight, query_bias, key_bias, value_bias
-            elif kernel_id == 2:
-                out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-                out_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "bias")]).view(-1)
-                transformer_layer[0].dense.weight.copy_(out_weight)
-                transformer_layer[0].dense.bias.copy_(out_bias)
-                del out_weight, out_bias
-            elif kernel_id == 3:
-                transformer_layer[0].weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
-                transformer_layer[0].bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
-                mlp_weight_0 = torch.from_numpy(weights[os.path.join(ROOT, FC_0, "kernel")]).t()
-                mlp_bias_0 = torch.from_numpy(weights[os.path.join(ROOT, FC_0, "bias")]).t()
-                transformer_layer[1].dense.weight.copy_(mlp_weight_0)
-                transformer_layer[1].dense.bias.copy_(mlp_bias_0)
-                del mlp_weight_0, mlp_bias_0
-            elif kernel_id == 0:
-                mlp_weight_1 = torch.from_numpy(weights[os.path.join(ROOT, FC_1, "kernel")]).t()
-                mlp_bias_1 = torch.from_numpy(weights[os.path.join(ROOT, FC_1, "bias")]).t()
-                transformer_layer[0].dense.weight.copy_(mlp_weight_1)
-                transformer_layer[0].dense.bias.copy_(mlp_bias_1)
-                del mlp_weight_1, mlp_bias_1
-
-        del weights
-        gc.collect()
-        return transformer_layer
-    
     def forward_kernel(self, layer, x, skip, i):
         start_kernel = time.time()
         kernel_id = (self.start_layer+i)%4
