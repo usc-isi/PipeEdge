@@ -3,13 +3,12 @@ import sys
 import gc
 import math
 import threading
-import psutil
-import requests
+import argparse
 import time
 import torch
+import psutil
 from math import floor
 import numpy as np
-from PIL import Image
 import torch.nn as nn
 import torch.distributed.autograd as dist_autograd
 import torch.distributed.rpc as rpc
@@ -126,9 +125,27 @@ class ProfileTransformer(TransformerShard):
         return self.profile_time, self.total_time,self.transfer_data_shape
 
 if __name__=="__main__":
-    batch_size = 8     
-    model_name = "google/vit-base-patch16-224" 
-    model = ProfileTransformer(model_name)
+    parser = argparse.ArgumentParser(description="Proile Model")
+
+    parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224", choices=["google/vit-base-patch16-224", 
+    "google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k"], help="the neural network model for loading")
+    parser.add_argument("-b", "--batch-size", default=8, type=int, help="batch size")
+    parser.add_argument("-r", "--repeat-time", default=10, type=int, help="repeat time for profiling")
+    parser.add_argument("-s", "--save-result",  action="store_true", help="save the results")
+    parser.add_argument("-c", "--cpu-name", default="unknown_cpu", help="cpu name for saving")
+    
+
+    args = parser.parse_args()
+    batch_size = args.batch_size     
+    model_name = args.model_name
+    repeat_time  = args.repeat_time
+    print(f">>>> Start profiling: model name {model_name} \n>>>> repeat time {repeat_time} \n>>>> batch size {batch_size} \n>>>> save file {args.save_result}")
+    model = ProfileTransformer(model_name, repeat_time)
     inputs = torch.randn(batch_size,3,224,224)
     time_p, total_time,data_shape = model(inputs)
-    print(f"time is {time_p}, total_time is {total_time}, data shape is {data_shape}")
+    print(f"time is {time_p}, total_time is {total_time}, \ndata shape is {data_shape}")
+    print("============== Finish Profiling Model ===============")
+    if args.save_result:
+        file_name = model_name.split('/')[-1] + "_"+args.cpu_name + "_" + str(batch_size)
+        np.savez(file_name, time=time_p, shape=data_shape)
+        print(f"Save the profiling result, the file name is {file_name}")
