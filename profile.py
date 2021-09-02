@@ -47,6 +47,7 @@ class ProfileTransformer(TransformerShard):
             self.weights_file_name = 'ViT-H_14.npz'
             self.end_layer = 128
         self.profile_time = [0]*self.end_layer
+        self.kernel_memory = [0]*self.end_layer
         self._make_layer()
 
     
@@ -58,6 +59,10 @@ class ProfileTransformer(TransformerShard):
             layer = self._build_kernel(i%4, math.ceil(i/4)-1, True)
             # layer = self.load_layer_weights(math.ceil(i/4)-1, layer, False, False, True, i%4)
             self.ops.append(layer)
+            process = psutil.Process(os.getpid())
+            print(f"loading layer {i}, memory {process.memory_info().rss / 1000000} MB")
+            self.kernel_memory[i-1] = process.memory_info().rss / 1000000
+            print(self.kernel_memory)
     
         ## last Shard
         num_label = self.config.num_labels
@@ -119,10 +124,12 @@ class ProfileTransformer(TransformerShard):
             end = time.time()
             self.total_time +=  (end - start)
             print(f">>>> Finish profile {iter+1}/{self.repeat_time}, time is {end - start}")
+            # process = psutil.Process(os.getpid())
+            # print(f"memory {process.memory_info().rss // 1000000} MB")
         self.profile_time = [i/self.repeat_time for i in self.profile_time]
         print(f">>>> Sum kernel time is {sum(self.profile_time)}")
         self.total_time /= self.repeat_time
-        return self.profile_time, self.total_time,self.transfer_data_shape
+        return self.profile_time, self.total_time,self.transfer_data_shape, self.kernel_memory
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser(description="Proile Model")
@@ -142,10 +149,13 @@ if __name__=="__main__":
     print(f">>>> Start profiling: model name {model_name} \n>>>> repeat time {repeat_time} \n>>>> batch size {batch_size} \n>>>> save file {args.save_result}")
     model = ProfileTransformer(model_name, repeat_time)
     inputs = torch.randn(batch_size,3,224,224)
-    time_p, total_time,data_shape = model(inputs)
+    process = psutil.Process(os.getpid())
+    print(f"memory {process.memory_info().rss // 1000000} MB")
+    time_p, total_time,data_shape, kernel_memory = model(inputs)
+    print(f"kernel memory is {kernel_memory}")
     print(f"time is {time_p}, total_time is {total_time}, \ndata shape is {data_shape}")
     print("============== Finish Profiling Model ===============")
     if args.save_result:
         file_name = model_name.split('/')[-1] + "_"+args.cpu_name + "_" + str(batch_size)
-        np.savez(file_name, time=time_p, shape=data_shape)
+        np.savez(file_name, time=time_p, shape=data_shape, memory=kernel_memory)
         print(f"Save the profiling result, the file name is {file_name}")

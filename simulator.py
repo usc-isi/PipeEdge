@@ -24,18 +24,19 @@ class Device():
         self.send_data_list = None
         self.stage = -1 # start index from 0, for double-check 
 
-    def check_pass_memory_limit(self, runtime_memory):
+    def check_pass_memory_limit(self, runtime_memory, ratio=0.7):
         pass_check = False
-        if runtime_memory < self.memory*0.9:
+        if runtime_memory < self.memory*ratio:
             pass_check = True 
         return pass_check
     
     def return_profiling_time(self, start_ops, end_ops):
-        profiling_file_name = self.model_name + "_" + str(self.computation) + "_" + str(self.microbatch_size)
+        profiling_file_name = self.model_name.split('/')[-1] + "_" + str(self.computation) + "_" + str(self.microbatch_size)+".npz"
         # TODO put in profiling result file 
-        # profiling_file = np.load(profiling_file_name)
-        profiling_file = np.load("vit-base-patch16-224_Core_i5_1.6GHz_8.npz")
-        time_p = profiling_file['']
+        print(f"profiling file name is {profiling_file_name}")
+        profiling_file = np.load(profiling_file_name)
+        # profiling_file = np.load("vit-base-patch16-224_Core_i5_8.npz")
+        time_p = profiling_file['time']
         comp_time = 0 
         for i in range(start_ops-1, end_ops):
             # comp_time += profiling_file[i]
@@ -86,7 +87,8 @@ def detach_receiver_data(receiver_data_set, single_data_size = 4.7, to_class=Tru
         datasize_list.append(receiver_data_set[i][1]*single_data_size)
     return receivers_list, datasize_list
          
-
+def memory_runtime(memory_list, start_ops, end_ops):
+    return memory_list[0] + memory_list[end_ops-1] - memory_list[start_ops-1]
 #########################################################
 #            Stage Exectuion Time estimation            #
 #########################################################
@@ -136,14 +138,19 @@ def heterogenous_simulator(partition, graph):
         stage_period_time = 0
         while count > 0:
             s = queue.pop(0)
-            print(f"s is {s}")
             for i in graph[s]:
                 node = i[0]
                 if visited[node] == False:
                     queue.append(node)
                     visited[node] = True
                     ## calculate node computation time
-                    print(f"Start ops is {partition[2*stage]} to {partition[2*stage+1]}")
+                    print(f"{node} starts ops from {partition[2*stage]} to {partition[2*stage+1]}")
+                    ## check node memory limitation
+                    memory_requirment = memory_runtime(memory_kernel,partition[2*stage], partition[2*stage+1] )
+                    pass_memory_check = str_to_class(node).check_pass_memory_limit(memory_requirment)
+                    if pass_memory_check == False:
+                        print(f"Cannot pass the memory limitation check on node {str_to_class(node).ID} with {str_to_class(node).memory} < {100000}")
+                        return -1
                     comp_time = str_to_class(node).return_profiling_time(partition[2*stage], partition[2*stage+1])
                     ##c calculate node communication time
                     receivers_tuple_list = graph[node]
@@ -152,6 +159,7 @@ def heterogenous_simulator(partition, graph):
                     ## the execution time of this node
                     node_period_time = max(comp_time, comm_time)
                     stage_period_time = max(stage_period_time, node_period_time)
+                    print(f"{node} comp time is {comp_time}, comm time is {comm_time}, period time is {node_period_time}")
 
             count -= 1
         stage += 1
@@ -187,7 +195,7 @@ if __name__=="__main__":
     total_nodes = 7
     ID_list = [0,1,2,3,4,5,6]
     memory_list = [2000, 2000, 2000, 8000, 8000,4000,5000]
-    computation_list = ["cpu1" , "cpu2", "cpu3","cpu1","cpu1", "cpu2", "cpu2"]
+    computation_list = ["Core_i5" , "Core_i5", "Core_i5","Core_i5","Core_i5", "Core_i5", "Core_i5"]
     inbound_bandwidth_list = [100, 500, 1000, 300, 300,1000,500]
     outband_bandwidth_list = [100, 500, 1000, 300, 300, 1000,500] 
     model_name = "google/vit-base-patch16-224"
@@ -195,7 +203,8 @@ if __name__=="__main__":
     #########################################################
     #                    Profiling Resutls                  #
     #########################################################
-
+    profiling_file = np.load("vit-base-patch16-224_Core_i5_8.npz")
+    memory_kernel = profiling_file['memory']
     initial_devices(total_nodes, ID_list, memory_list, computation_list, inbound_bandwidth_list, outband_bandwidth_list, model_name)
     node_microbatch_size = g.statistic_microbatch_size("Input")
     for i,key in enumerate(node_microbatch_size):
