@@ -23,6 +23,9 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 #########################################################
 #           Define Model Parallel Transformer           #
 #########################################################
+def fetch_rref_value(rref):
+    return rref.local_value()
+
 class TransformerShard(nn.Module):
     def __init__(self, rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
         super(TransformerShard, self).__init__()
@@ -265,11 +268,13 @@ class TransformerShard(nn.Module):
 
 
     @torch.no_grad()
-    def forward(self, x_rref):
-        if self.is_first:
-            x = x_rref.to_here()
-        else:
-            x, skip = x_rref.to_here()
+    def forward_pre(self, x):
+        # if self.is_first:
+        #     x = x_rref.to_here()
+        # else:
+        #     x, skip = x_rref.to_here()
+        skip = x[1]
+        x = x[0]
         with self._lock:
             start = time.time()
             if self.is_first:
@@ -292,13 +297,26 @@ class TransformerShard(nn.Module):
                 x = self.classifier(x[:, 0, :])
             end = time.time()
 
-        self.total_time +=  (end - start)
-        self.total_batch += 1
-        print(f"Round {self.total_batch}: memory {process.memory_info().rss // 1000000} MB")
-        print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
+        # self.total_time +=  (end - start)
+        # self.total_batch += 1
+        # print(f"Round {self.total_batch}: memory {process.memory_info().rss // 1000000} MB")
+        # print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         if self.is_last:
             return x
         return x, skip
+    
+    @staticmethod 
+    @rpc.functions.async_execution
+    def forward(self_rref, x_rref):
+        self = self_rref.local_value()
+        fut = rpc.rpc_async(x_rref.owner(), fetch_rref_value, args=(x_rref,))
+        process = psutil.Process(os.getpid())
+        self.total_batch  += 1
+        print(f"Model1 start forward {self.total_batch} microbatch, memory {process.memory_info().rss / 1000000} MB")
+        def bottom_half(future):
+            y = self.forward_pre(future.wait())
+            return y
+        return fut.then(bottom_half)
 
     def parameter_rrefs(self):
         return [RRef(p) for p in self.parameters()]
@@ -323,12 +341,26 @@ class DistTransformer(nn.Module):
     def forward(self, xs):
         out_futures = []
         for x in iter(xs.split(self.num_split, dim=0)):
+            skip = torch.zeros(x.size())
+            x = torch.stack((x, skip), 0)
             x_rref = RRef(x)
             for i in range(self.world_size-1):
-                x_rref = self.rref_list[i].remote().forward(x_rref)
-            y_rref = self.rref_list[self.world_size-1].rpc_async().forward(x_rref)
+                # x_rref = self.rref_list[i].remote().forward(x_rref)
+                x_rref = rpc.remote(
+                    self.rref_list[i].owner(),
+                    # self.worker0,
+                    TransformerShard.forward,
+                    args=(self.rref_list[i], x_rref ),
+                )
+            # y_rref = self.rref_list[self.world_size-1].rpc_async().forward(x_rref)
+            y_rref= rpc.rpc_async(
+                    self.rref_list[self.world_size-1].owner(),
+                    # self.worker1,
+                    TransformerShard.forward,
+                    args=(self.rref_list[self.world_size-1], x_rref),
+                )
 
-            x_rref.to_here()
+            # x_rref.to_here()
             out_futures.append(y_rref)
         return torch.cat(torch.futures.wait_all(out_futures))
 
