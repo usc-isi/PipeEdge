@@ -23,6 +23,9 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 #########################################################
 #           Define Model Parallel Transformer           #
 #########################################################
+def fetch_rref_value(rref):
+    return rref.local_value()
+
 class TransformerShard(nn.Module):
     def __init__(self, rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
         super(TransformerShard, self).__init__()
@@ -265,23 +268,32 @@ class TransformerShard(nn.Module):
 
 
     @torch.no_grad()
-    def forward(self, x_rref):
-        if self.is_first:
-            x = x_rref.to_here()
-        else:
-            x, skip = x_rref.to_here()
+    def forward_pre(self, x):
+        # if self.is_first:
+        #     x = x_rref.to_here()
+        # else:
+        #     x, skip = x_rref.to_here()
+        gc.collect()
+        skip = x[1]
+        x = x[0]
         with self._lock:
             start = time.time()
             if self.is_first:
                 x = self.embeddings(x)
                 skip = x
 
+            start1 = time.time()
             for i, op in enumerate(self.first_ops):
                 x, skip = self.forward_kernel(op, x, skip, (self.start_layer+i)%4)
+            end1 = time.time()
+            print(f"i,op = {end1 - start1}")
 
+            start2 = time.time()
             for layer in self.vit_layers:
                 x = layer(x)[0]
-                skip = x
+            skip = x
+            end2 = time.time()
+            print(f"layer = {end2 - start2}")
 
             for i, op in enumerate(self.last_ops):
                 # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with load_layer_weights()
@@ -294,11 +306,24 @@ class TransformerShard(nn.Module):
 
         self.total_time +=  (end - start)
         self.total_batch += 1
-        print(f"Round {self.total_batch}: memory {process.memory_info().rss // 1000000} MB")
+        print(f"Round {self.total_batch}: memory {process.memory_info().rss / 1000000} MB")
         print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         if self.is_last:
             return x
         return x, skip
+    
+    @staticmethod 
+    @rpc.functions.async_execution
+    def forward(self_rref, x_rref):
+        self = self_rref.local_value()
+        fut = rpc.rpc_async(x_rref.owner(), fetch_rref_value, args=(x_rref,))
+        process = psutil.Process(os.getpid())
+        # self.total_batch  += 1
+        # print(f"Model1 start forward {self.total_batch} microbatch, memory {process.memory_info().rss / 1000000} MB")
+        def bottom_half(future):
+            y = self.forward_pre(future.wait())
+            return y
+        return fut.then(bottom_half)
 
     def parameter_rrefs(self):
         return [RRef(p) for p in self.parameters()]
@@ -323,14 +348,31 @@ class DistTransformer(nn.Module):
     def forward(self, xs):
         out_futures = []
         for x in iter(xs.split(self.num_split, dim=0)):
+            skip = torch.zeros(x.size())
+            x = torch.stack((x, skip), 0)
             x_rref = RRef(x)
             for i in range(self.world_size-1):
-                x_rref = self.rref_list[i].remote().forward(x_rref)
-            y_rref = self.rref_list[self.world_size-1].rpc_async().forward(x_rref)
+                # x_rref = self.rref_list[i].remote().forward(x_rref)
+                x_rref = rpc.remote(
+                    self.rref_list[i].owner(),
+                    # self.worker0,
+                    TransformerShard.forward,
+                    args=(self.rref_list[i], x_rref ),
+                )
+            # y_rref = self.rref_list[self.world_size-1].rpc_async().forward(x_rref)
+            y_rref= rpc.rpc_async(
+                    self.rref_list[self.world_size-1].owner(),
+                    # self.worker1,
+                    TransformerShard.forward,
+                    args=(self.rref_list[self.world_size-1], x_rref),
+                )
 
-            x_rref.to_here()
+            # x_rref.to_here()
             out_futures.append(y_rref)
-        return torch.cat(torch.futures.wait_all(out_futures))
+        res = torch.cat(torch.futures.wait_all(out_futures))
+        del out_futures
+        gc.collect()
+        return res
 
 
 #########################################################
@@ -353,6 +395,8 @@ def run_master(model_name, world_size, split_size):
             # generate random inputs and labels       
             outputs = model(inputs['pixel_values'])
             print(f"outputs is {outputs}")
+            del outputs
+            gc.collect()
             # predicted_class_idx = outputs[0].argmax(-1).item()
             # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
         ## Calculate time
@@ -413,7 +457,7 @@ if __name__=="__main__":
     parser.add_argument("-t", "--threshold", default=1000, type=int, help="total number of array elements which trigger summarization rather than full repr")
     parser.add_argument("-n", "--num-batches", default=1, type=int, help="total number of batches")
     parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
-    parser.add_argument("-w", "--worker-threads", default=64, type=int, help="the number of worker threads for the communication backend")
+    parser.add_argument("-w", "--worker-threads", default=16, type=int, help="the number of worker threads for the communication backend")
     parser.add_argument("-sp", "--splits", default="8", help="the list of microbatch size")
     args = parser.parse_args()
     torch.set_printoptions(profile=args.print,threshold=args.threshold)  
