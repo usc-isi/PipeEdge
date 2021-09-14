@@ -273,7 +273,6 @@ class TransformerShard(nn.Module):
         #     x = x_rref.to_here()
         # else:
         #     x, skip = x_rref.to_here()
-        gc.collect()
         skip = x[1]
         x = x[0]
         with self._lock:
@@ -308,6 +307,7 @@ class TransformerShard(nn.Module):
         self.total_batch += 1
         print(f"Round {self.total_batch}: memory {process.memory_info().rss / 1000000} MB")
         print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
+
         if self.is_last:
             return x
         return x, skip
@@ -318,8 +318,6 @@ class TransformerShard(nn.Module):
         self = self_rref.local_value()
         fut = rpc.rpc_async(x_rref.owner(), fetch_rref_value, args=(x_rref,))
         process = psutil.Process(os.getpid())
-        # self.total_batch  += 1
-        # print(f"Model1 start forward {self.total_batch} microbatch, memory {process.memory_info().rss / 1000000} MB")
         def bottom_half(future):
             y = self.forward_pre(future.wait())
             return y
