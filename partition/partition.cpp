@@ -2,6 +2,7 @@
 #include<complex>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <algorithm>
 #include <iostream>
 #include <vector>
@@ -12,8 +13,8 @@ const int N = 200005;
 
 const int num_layers = 48;
 
-const int device_type_num = 6;
-const int device_count[] = {20, 12, 5, 5, 5, 5};
+const int device_type_num = 1;
+const int device_count[] = {2};
 double* time_p;
 int* data_shape;
 
@@ -147,10 +148,17 @@ void work() {
   }
 }
 
-int main() {
-  cnpy::NpyArray arr = cnpy::npz_load("vit-base-patch16-224_Core_i5_1.npz","time");
+int main(int argc, char **argv) {
+  // argv[1]: model name (vit-base-patch16-224)
+  // argb[2]: device name (Core_i5)
+  std::string model_name = argv[1];
+  std::string device_name = argv[2];
+  std::string time_file_name = "./profiling/" + model_name + "_" + device_name + "_1.npz";
+  std::string shape_file_name = "./profiling/"+model_name+"_8.npz";
+  std::cout<<time_file_name<<" "<<shape_file_name;
+  cnpy::NpyArray arr = cnpy::npz_load(time_file_name,"time");
   time_p = arr.data<double>();
-  cnpy::NpyArray arr2 = cnpy::npz_load("vit-base-patch16-224_8.npz","shape");
+  cnpy::NpyArray arr2 = cnpy::npz_load("./profiling/vit-base-patch16-224_8.npz","shape");
   data_shape = arr2.data<int>();
 //   printf("shape is %d %d, %d", arr.shape.size(), arr.shape[0], arr.shape[1]);
   for(int i = 0; i < arr.shape[0]; i++) {
@@ -160,7 +168,7 @@ int main() {
   return 0;
 }
 
-// g++ a.cpp -o a -O2
+//  g++  ./partition/partition.cpp -o partition -O2 -L/usr/local -lcnpy -lz --std=c++17
 // ./a
 
 // 2 4 3
