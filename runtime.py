@@ -2,6 +2,7 @@ import os
 import sys
 import gc
 import math
+import logging
 import threading
 import psutil
 import requests
@@ -20,6 +21,9 @@ from torch.nn import functional as F
 from transformers import AutoConfig, ViTFeatureExtractor, ViTForImageClassification
 from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput,ViTIntermediate, ViTOutput
 
+
+
+logging.basicConfig(filename='runtime.log',level=logging.INFO)
 #########################################################
 #           Define Model Parallel Transformer           #
 #########################################################
@@ -59,9 +63,11 @@ class TransformerShard(nn.Module):
         elif self.model_name == 'google/vit-huge-patch14-224-in21k':
             self.weights_file_name = 'ViT-H_14.npz'
         if self.load_weight:
-            print(f">>>> Load weight file f{self.weights_file_name}")
+            print(f">>>> Load weight file {self.weights_file_name}")
+            logging.info(f">>>> Load weight file f{self.weights_file_name}")
         self._make_layer()
         print(f"======= Finish Build TransformerShard{self.rank} ==========")
+        logging.info(f"======= Finish Build TransformerShard{self.rank} ==========")
     
     def _make_layer(self):
         ## first Shard
@@ -165,11 +171,12 @@ class TransformerShard(nn.Module):
             with torch.no_grad():
                 self.layernorm.weight.copy_(torch.from_numpy(weights["Transformer/encoder_norm/scale"]))
                 self.layernorm.bias.copy_(torch.from_numpy(weights["Transformer/encoder_norm/bias"]))
-                head_kernel = np.transpose(weights["head/kernel"])  
+                # head_kernel = np.transpose(weights["head/kernel"])  
                 # print(f"classifier weight is {self.classifier.weight.shape}, head kernel weight shape is {head_kernel.shape}")
-                self.classifier.weight.copy_(torch.from_numpy(head_kernel))
+                self.classifier.weight.copy_(torch.from_numpy(np.transpose(weights["head/kernel"])))
                 self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))  
                 # print(f">>>> Load Layernorm, classifier for the last shard")  
+                
 
         if load_first == False and load_last == False:
             with torch.no_grad():
@@ -210,6 +217,7 @@ class TransformerShard(nn.Module):
                     transformer_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
                     transformer_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
                     print(f"memory {process.memory_info().rss // 1000000} MB")
+
                    
                 elif kernel_id == 1:
 
@@ -230,6 +238,7 @@ class TransformerShard(nn.Module):
                     transformer_layer[1].query.bias.copy_(query_bias)
                     transformer_layer[1].key.bias.copy_(key_bias)
                     transformer_layer[1].value.bias.copy_(value_bias)
+
                 elif kernel_id == 2:
                     out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                     out_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "bias")]).view(-1)
@@ -276,23 +285,22 @@ class TransformerShard(nn.Module):
         skip = x[1]
         x = x[0]
         with self._lock:
+            logging.info(f"Start memory {process.memory_info().rss / 1000000} MB")
             start = time.time()
             if self.is_first:
                 x = self.embeddings(x)
                 skip = x
 
-            start1 = time.time()
             for i, op in enumerate(self.first_ops):
                 x, skip = self.forward_kernel(op, x, skip, (self.start_layer+i)%4)
-            end1 = time.time()
-            print(f"i,op = {end1 - start1}")
-
-            start2 = time.time()
-            for layer in self.vit_layers:
+            
+            for i, layer in enumerate(self.vit_layers):
+                logging.info(f"Before {i}: {process.memory_info().rss / 1000000} MB")
                 x = layer(x)[0]
+                logging.info(f"After {i}: {process.memory_info().rss / 1000000} MB")
+                gc.collect()
             skip = x
-            end2 = time.time()
-            print(f"layer = {end2 - start2}")
+            logging.info(f"vit-layer memory {process.memory_info().rss / 1000000} MB")
 
             for i, op in enumerate(self.last_ops):
                 # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with load_layer_weights()
@@ -301,13 +309,15 @@ class TransformerShard(nn.Module):
             if self.is_last:
                 x = self.layernorm(x)
                 x = self.classifier(x[:, 0, :])
+            logging.info(f"Last memory {process.memory_info().rss / 1000000} MB")
             end = time.time()
-
         self.total_time +=  (end - start)
         self.total_batch += 1
         print(f"Round {self.total_batch}: memory {process.memory_info().rss / 1000000} MB")
-        print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
-
+        print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}, temporarily throughput is {self.total_batch*x.shape[0]/self.total_time}")
+        logging.info(f"Round {self.total_batch}: memory {process.memory_info().rss / 1000000} MB")
+        logging.info(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time},temporarily throughput is {self.total_batch*x.shape[0]/self.total_time}")
+        gc.collect()
         if self.is_last:
             return x
         return x, skip
@@ -317,7 +327,6 @@ class TransformerShard(nn.Module):
     def forward(self_rref, x_rref):
         self = self_rref.local_value()
         fut = rpc.rpc_async(x_rref.owner(), fetch_rref_value, args=(x_rref,))
-        process = psutil.Process(os.getpid())
         def bottom_half(future):
             y = self.forward_pre(future.wait())
             return y
@@ -350,14 +359,11 @@ class DistTransformer(nn.Module):
             x = torch.stack((x, skip), 0)
             x_rref = RRef(x)
             for i in range(self.world_size-1):
-                # x_rref = self.rref_list[i].remote().forward(x_rref)
                 x_rref = rpc.remote(
                     self.rref_list[i].owner(),
-                    # self.worker0,
                     TransformerShard.forward,
                     args=(self.rref_list[i], x_rref ),
                 )
-            # y_rref = self.rref_list[self.world_size-1].rpc_async().forward(x_rref)
             y_rref= rpc.rpc_async(
                     self.rref_list[self.world_size-1].owner(),
                     # self.worker1,
@@ -365,13 +371,13 @@ class DistTransformer(nn.Module):
                     args=(self.rref_list[self.world_size-1], x_rref),
                 )
 
-            # x_rref.to_here()
+            
             out_futures.append(y_rref)
         res = torch.cat(torch.futures.wait_all(out_futures))
-        del out_futures
-        gc.collect()
+        # res = x_rref.to_here()
+        # del out_futures
+        # gc.collect()
         return res
-
 
 #########################################################
 #                   Run RPC Processes                   #
@@ -393,6 +399,7 @@ def run_master(model_name, world_size, split_size):
             # generate random inputs and labels       
             outputs = model(inputs['pixel_values'])
             print(f"outputs is {outputs}")
+            logging.info(f"outputs is {outputs}")
             del outputs
             gc.collect()
             # predicted_class_idx = outputs[0].argmax(-1).item()
@@ -408,11 +415,13 @@ def run_master(model_name, world_size, split_size):
     best_throughput  = -1
     for i in range(len(split_size)):
         print(f"Split size {split_size[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
+        logging.info(f"Split size {split_size[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
         if throughputs[i] > best_throughput:
             best_throughput = throughputs[i]
             best_choice = i 
     print("\n---------------- Split output line ----------------")
     print(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
+    logging.info(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
 
 
 def run_worker(model_name, rank, world_size, num_split):
@@ -466,6 +475,7 @@ if __name__=="__main__":
     # torch.set_num_interop_threads(parallel_threads)
     torch.set_grad_enabled(False)
     print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
+    logging.info(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
     process = psutil.Process(os.getpid())
     #########################################################
     #                 Configuration for Network             #
