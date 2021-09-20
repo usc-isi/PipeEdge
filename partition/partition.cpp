@@ -11,10 +11,10 @@
 using int64 = long long;
 const int N = 200005;
 
-const int num_layers = 48;
+const int num_layers = 128;
 
 const int device_type_num = 1;
-const int device_count[] = {2};
+const int device_count[] = {6};
 double* time_p;
 int* data_shape;
 
@@ -135,30 +135,40 @@ void work() {
       u = last_u;
   }
 
+  std::vector<int> partition;
   std::tie(layer, S, u) = res_index;
   printf("layer [%d, %d] used by node %d, rank %d\n", layer + 1, num_layers, u, selected_nodes);
+  partition.push_back(layer + 1);
+  partition.push_back(num_layers);
   while (layer > 0) {
     int last_l, last_u;
     selected_nodes--;
     std::tie(last_l, last_u) = parent[layer][S][u];
+    partition.push_back(last_l + 1);
+    partition.push_back(layer);
     printf("layer [%d, %d] used by node %d, rank %d\n", last_l + 1, layer, last_u,selected_nodes);
     layer = last_l;
     S -= prefix_product[last_u];
     u = last_u;
   }
+  std::sort(partition.begin(), partition.end());
+  for(auto& it : partition) {
+    std::cout<<it<<",";
+  }
+
 }
 
 int main(int argc, char **argv) {
-  // argv[1]: model name (vit-base-patch16-224)
+  // argv[1]: model name (vit-base-patch16-224) vit-large-patch16-224 vit-huge-patch14-224-in21k
   // argb[2]: device name (Core_i5)
   std::string model_name = argv[1];
   std::string device_name = argv[2];
-  std::string time_file_name = "./profiling/" + model_name + "_" + device_name + "_1.npz";
-  std::string shape_file_name = "./profiling/"+model_name+"_8.npz";
-  std::cout<<time_file_name<<" "<<shape_file_name;
+  std::string time_file_name = "./profiling/" + model_name + "_" + device_name + "_8.npz";
+  std::string shape_file_name = "./profiling/vit-base-patch16-224_8.npz";
+  std::cout<<"Loading profiling file:" <<time_file_name<<" "<<shape_file_name;
   cnpy::NpyArray arr = cnpy::npz_load(time_file_name,"time");
   time_p = arr.data<double>();
-  cnpy::NpyArray arr2 = cnpy::npz_load("./profiling/vit-base-patch16-224_8.npz","shape");
+  cnpy::NpyArray arr2 = cnpy::npz_load(shape_file_name,"shape");
   data_shape = arr2.data<int>();
 //   printf("shape is %d %d, %d", arr.shape.size(), arr.shape[0], arr.shape[1]);
   for(int i = 0; i < arr.shape[0]; i++) {
@@ -168,8 +178,8 @@ int main(int argc, char **argv) {
   return 0;
 }
 
-//  g++  ./partition/partition.cpp -o partition -O2 -L/usr/local -lcnpy -lz --std=c++17
-// ./a
+//  g++  ./partition/partition.cpp -o a -O2 -L/usr/local -lcnpy -lz --std=c++17
+// ./a vit-base-patch16-224 Core_i5
 
 // 2 4 3
 // 3 * 5 * 4 = 60
