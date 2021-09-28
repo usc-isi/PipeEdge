@@ -11,17 +11,48 @@
 using int64 = long long;
 const int N = 200005;
 
-const int num_layers = 128;
+int num_layers = 0;
 
-const int device_type_num = 1;
-const int device_count[] = {6};
-double* time_p;
-int* data_shape;
+// node 0: C2558 
+// node 1: E3845
+// node 2: C2558 75% 8GB
+// node 3: C2558 50% 4GB
+// node 4: C2558 25% 4GB 
+const int device_type_num = 5;
+const int device_count[] = {4,4,0, 0,8};
+double* time_p_0;
+double* time_p_1;
+double* time_p_2;
+double* time_p_3;
+double* time_p_4;
+double* memory;
+int64* data_shape;
+
+int decide_layers(std::string model_name) {
+  if(model_name == "vit-large-patch16-224") num_layers=96;
+  else if(model_name == "vit-huge-patch14-224-in21k") num_layers=128;
+  else num_layers=48;
+  return num_layers;
+}
+
+double* GetProfilingTime(int node) {
+  if(node == 0) return time_p_0;
+  else if (node == 1) return time_p_1;
+  else if (node == 2) return time_p_2;
+  else if (node == 3) return time_p_3;
+  else if (node == 4) return time_p_4;
+  return time_p_4;
+}
 
 double GetComputationTime(int layer_l, int layer_r, int node) {
     double comp_time = 0;
     for(int i = layer_l - 1; i < layer_r; i++){
-        double tmp = (double)time_p[i];
+        double* time_p =  GetProfilingTime(node); 
+        double tmp;
+        if(node == 4){
+          tmp = (double)time_p[i];
+        }else tmp = (double)time_p[i];
+        // double tmp = (double)time_p[i];
         comp_time += tmp;
     }
   return comp_time;
@@ -30,19 +61,36 @@ double GetComputationTime(int layer_l, int layer_r, int node) {
 
 double GetBandwidth(int node_u, int node_v) {
     // Mbps
-    return 300.0;
+    // printf("node_u is %d, node_v is %d\n", node_u, node_v);
+    // if(node_u<1 && node_v<1){
+    //   return 1;
+    // }
+    return 1000;
 }
 
 double GetCommunicationTime(int layer_r, int node_u, int node_v) {
     double bandwidth = GetBandwidth(node_u, node_v);
     // transmission data size + residul connection -> Mb
-    double data_size = data_shape[layer_r-1]*2/1000000; 
-    double comm_time = data_size/bandwidth;
+    // *8 use batch size 8
+    double data_size = (double)data_shape[layer_r-1]*2*32/1000000; 
+    double comm_time = (data_size/bandwidth)*1.1;
+    // printf("layer_r is %d, datashape is %lld, node_u is %d, v is %d, data_size is %lf, bandwidth is %f, comm_time is %f\n", layer_r, data_shape[layer_r-1], node_u, node_v, data_size, bandwidth, comm_time);
     return comm_time;
     
 }
+
+double GetNodeMemory(int node) {
+  if(node == 0) return 8000;
+  else if(node == 1) return 2000;
+  else if(node == 2) return 4000;
+  return 4000;
+}
 bool isCapacityAllowed(int layer_l, int layer_r, int node) {
-  return true;
+  // communication memory overheads
+  double needed_memory = (memory[0] + memory[layer_r-1] - memory[layer_l-1])*1.6;
+  // printf("node is %d, layer_l is %d, layer_r is %d, Memory is %f, memory[0] is %f, r is %f, l is %f\n", node, layer_l, layer_r, needed_memory, memory[0], memory[layer_r-1], memory[layer_l-1]);
+  double node_memory =GetNodeMemory(node); //MB
+  return node_memory*0.7 > needed_memory;
 }
 
 void work() {
@@ -162,24 +210,47 @@ int main(int argc, char **argv) {
   // argv[1]: model name (vit-base-patch16-224) vit-large-patch16-224 vit-huge-patch14-224-in21k
   // argb[2]: device name (Core_i5)
   std::string model_name = argv[1];
-  std::string device_name = argv[2];
-  std::string time_file_name = "./profiling/" + model_name + "_" + device_name + "_8.npz";
-  std::string shape_file_name = "./profiling/vit-base-patch16-224_8.npz";
-  std::cout<<"Loading profiling file:" <<time_file_name<<" "<<shape_file_name;
-  cnpy::NpyArray arr = cnpy::npz_load(time_file_name,"time");
-  time_p = arr.data<double>();
+  num_layers = decide_layers(model_name);
+  printf("num_layers is %d\n", num_layers);
+  std::string time_file_name_0 = "./profiling/" + model_name + "_" + "C2558" + "_8.npz";
+  std::string time_file_name_1 = "./profiling/" + model_name + "_" + "E3845" + "_8.npz";
+  std::string time_file_name_2 = "./profiling/" + model_name + "_" + "C2558_75" + "_8.npz";
+  std::string time_file_name_3 = "./profiling/" + model_name + "_" + "C2558_50" + "_8.npz";
+  std::string time_file_name_4 = "./profiling/" + model_name + "_" + "C2558_10" + "_8.npz";
+  std::string shape_file_name = "./profiling/" + model_name + "_shape.npz";
+  std::string memory_file_name = "./profiling/" + model_name + "_memory.npz";
+  std::cout<<"Loading profiling file:" <<time_file_name_0<<" "<<shape_file_name;
+  cnpy::NpyArray arr_node0 = cnpy::npz_load(time_file_name_0,"time");
+  time_p_0 = arr_node0.data<double>();
+
+  cnpy::NpyArray arr_node1 = cnpy::npz_load(time_file_name_1,"time");
+  time_p_1 = arr_node1.data<double>();
+
+  cnpy::NpyArray arr_node2 = cnpy::npz_load(time_file_name_2,"time");
+  time_p_2 = arr_node2.data<double>();
+
+  cnpy::NpyArray arr_node3 = cnpy::npz_load(time_file_name_3,"time");
+  time_p_3 = arr_node3.data<double>();
+
+  cnpy::NpyArray arr_node4 = cnpy::npz_load(time_file_name_4,"time");
+  time_p_4 = arr_node4.data<double>();
+
   cnpy::NpyArray arr2 = cnpy::npz_load(shape_file_name,"shape");
-  data_shape = arr2.data<int>();
+  data_shape = arr2.data<int64>(); 
+  cnpy::NpyArray arr3 = cnpy::npz_load(memory_file_name,"memory");
+  memory = arr3.data<double>(); 
 //   printf("shape is %d %d, %d", arr.shape.size(), arr.shape[0], arr.shape[1]);
-  for(int i = 0; i < arr.shape[0]; i++) {
-      printf("time_p[%d] = %lf, data_shape[%d] = %d  ", i, time_p[i], i, data_shape[i]);
+  for(int i = 0; i < arr_node0.shape[0]; i++) {
+      printf("time_p_0[%d] = %lf, time_p_1[%d]=%lf, data_shape[%d] = %lld  ", i, time_p_0[i], i, time_p_1[i], i, data_shape[i]);
   }
   work();
   return 0;
 }
 
 //  g++  ./partition/partition.cpp -o a -O2 -L/usr/local -lcnpy -lz --std=c++17
-// ./a vit-base-patch16-224 Core_i5
+// ./a vit-base-patch16-224 
+// ./a vit-large-patch16-224 
+// ./a vit-huge-patch14-224-in21k
 
 // 2 4 3
 // 3 * 5 * 4 = 60
