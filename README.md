@@ -65,8 +65,8 @@ partition = [1, 4, 5,8, 9, 20, 21,48]
 - [x] Operator-level partition method
 - [x] Edit profile script
 - [x] Create a simulator 
-- [ ] Import profile to Partition
-- [ ] Edit Partition script
+- [x] Import profile to Partition
+- [x] Edit Partition script
 - [ ] Import Partition to Runtime
 - [ ] Solve the memory leak problem ([RPC Framework Problem](https://github.com/pytorch/pytorch/issues/61920#issuecomment-886345414))
 
