@@ -5,7 +5,7 @@ host_addr_map = {"m0":"172.30.0.63", "m10": "172.30.0.65", "m20": "172.30.0.30",
 "n10": "172.30.0.10", "n20": "172.30.0.17"}
 
 def create_python_command(file_name, rank, world_size, partition, host_addr, socket_ifname, model_name, batch_size, num_batch, work_threads, splits):
-    command = f"python3 {file_name} {rank} {world_size} -m {model_name} -pt {partition} --addr {host_addr} -s {socket_ifname} -b {batch_size} -n {num_batch} -w {work_threads} -sp {splits} "
+    command = f"python3 {file_name} {rank} {world_size} -m {model_name} -pt {partition} --addr {host_addr} -s {socket_ifname} -b {batch_size} -n {num_batch} -w {work_threads} -sp {splits}"
     print(command)
     return command
 
@@ -24,12 +24,17 @@ def create_script(script_name, node_list, file_name, world_size, partition, host
     host_addr = host_addr_map[host]
     write_async = True
     rank = 0
-    create_python_command(file_name, rank, world_size, partition, host_addr, socket_ifname, model_name, batch_size, num_batch, work_threads, splits)
+    command = create_python_command(file_name, rank, world_size, partition, host_addr, socket_ifname, model_name, batch_size, num_batch, work_threads, splits)
+    script.write(f"# {command} \n")
     for node in node_list:
         rank += 1
         command =  create_python_command(file_name, rank, world_size, partition, host_addr, socket_ifname, model_name, batch_size, num_batch, work_threads, splits)
-        if node == node_list[-1]:
+        if node == node_list[-2]:
             write_async = False
+        if node == node_list[-1]:
+            script.write(f"# {command} \n")
+            break
+
         create_shell_command(script, node, command, write_async)
     script.close()
 
@@ -48,7 +53,7 @@ if __name__=="__main__":
     parser.add_argument("-s", "--socket-ifname", type=str, default="eth0", help="socket iframe name, use [ifconfig | ipaddress] to check")
     parser.add_argument("-n", "--num-batches", default=1, type=int, help="total number of batches")
     parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
-    parser.add_argument("-w", "--worker-threads", default=16, type=int, help="the number of worker threads for the communication backend")
+    parser.add_argument("-w", "--worker-threads", default=18, type=int, help="the number of worker threads for the communication backend")
     parser.add_argument("-sp", "--splits", default="8", help="the list of microbatch size")
     parser.add_argument("-nz","--nodes", type=str,help="selected nodes")
     parser.add_argument("-wt", "--with-out-first-last",  action="store_true", help="without the first and last node in the script")
