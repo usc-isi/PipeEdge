@@ -80,8 +80,8 @@ def run_master(model_name, world_size, split_size):
             outputs = model(inputs['pixel_values'])
             print(f"outputs is {outputs}")
             logging.info(f"outputs is {outputs}")
-            del outputs
-            gc.collect()
+            # del outputs
+            # gc.collect()
             # predicted_class_idx = outputs[0].argmax(-1).item()
             # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
         ## Calculate time
