@@ -18,13 +18,14 @@ int num_layers = 0;
 // node 2: C2558 75% 8GB
 // node 3: C2558 50% 4GB
 // node 4: C2558 25% 4GB 
-const int device_type_num = 5;
-const int device_count[] = {4,4,0, 0,8};
+const int device_type_num = 3;
+const int device_count[] = {3,3,3,0,0,0};
 double* time_p_0;
 double* time_p_1;
 double* time_p_2;
 double* time_p_3;
 double* time_p_4;
+double* time_p_5;
 double* memory;
 int64* data_shape;
 
@@ -36,11 +37,12 @@ int decide_layers(std::string model_name) {
 }
 
 double* GetProfilingTime(int node) {
-  if(node == 0) return time_p_0;
-  else if (node == 1) return time_p_1;
+  if(node < 2) return time_p_0;
+  else if (node < 4) return time_p_1;
   else if (node == 2) return time_p_2;
   else if (node == 3) return time_p_3;
   else if (node == 4) return time_p_4;
+  else if (node == 5) return time_p_5;
   return time_p_4;
 }
 
@@ -65,7 +67,13 @@ double GetBandwidth(int node_u, int node_v) {
     // if(node_u<1 && node_v<1){
     //   return 1;
     // }
-    return 1000;
+    if(node_u == 0) return 30;
+    else if (node_u == 1) return 20;
+    else if (node_u == 2) return 10;
+    else if (node_u == 3) return 5;
+    else if (node_u == 4) return 20;
+    else if (node_u == 5) return 10;
+    return 100;
 }
 
 double GetCommunicationTime(int layer_r, int node_u, int node_v) {
@@ -216,7 +224,8 @@ int main(int argc, char **argv) {
   std::string time_file_name_1 = "./profiling/" + model_name + "_" + "E3845" + "_8.npz";
   std::string time_file_name_2 = "./profiling/" + model_name + "_" + "C2558_75" + "_8.npz";
   std::string time_file_name_3 = "./profiling/" + model_name + "_" + "C2558_50" + "_8.npz";
-  std::string time_file_name_4 = "./profiling/" + model_name + "_" + "C2558_10" + "_8.npz";
+  std::string time_file_name_4 = "./profiling/" + model_name + "_" + "C2558_25" + "_8.npz";
+  std::string time_file_name_5 = "./profiling/" + model_name + "_" + "C2558_10" + "_8.npz";
   std::string shape_file_name = "./profiling/" + model_name + "_shape.npz";
   std::string memory_file_name = "./profiling/" + model_name + "_memory.npz";
   std::cout<<"Loading profiling file:" <<time_file_name_0<<" "<<shape_file_name;
@@ -234,6 +243,9 @@ int main(int argc, char **argv) {
 
   cnpy::NpyArray arr_node4 = cnpy::npz_load(time_file_name_4,"time");
   time_p_4 = arr_node4.data<double>();
+
+  cnpy::NpyArray arr_node5 = cnpy::npz_load(time_file_name_5,"time");
+  time_p_5 = arr_node5.data<double>();
 
   cnpy::NpyArray arr2 = cnpy::npz_load(shape_file_name,"shape");
   data_shape = arr2.data<int64>(); 
