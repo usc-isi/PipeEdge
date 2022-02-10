@@ -148,7 +148,7 @@ class TransformerShard(nn.Module):
             with torch.no_grad():
                 self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["Transformer/posembed_input/pos_embedding"])))
                 conv_weight = weights["embedding/kernel"]
-                O, I, J, K = conv_weight.shape
+                # O, I, J, K = conv_weight.shape
                 # print(f"conv_shape is {O, I, J, K}, pe weight shape is {self.embeddings.patch_embeddings.projection.weight.shape}")
                 # conv_weight = conv_weight.reshape(K,J,O,I)
                 conv_weight = conv_weight.transpose([3, 2, 0, 1])
@@ -301,7 +301,6 @@ class TransformerShard(nn.Module):
                 x = self.layernorm(x)
                 x = self.classifier(x[:, 0, :])
             logging.info(f"Last memory {self.process.memory_info().rss / 1000000} MB")
-            time_stamp2 = time.time()
             if self.total_batch == 0:
                 self.batch_0_finish = time.time()
             else:
