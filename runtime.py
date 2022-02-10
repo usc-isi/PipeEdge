@@ -1,25 +1,16 @@
-import os
-import sys
+import argparse
 import gc
-import math
 import logging
-import threading
+import os
+import time
+# import cProfile
+from PIL import Image
 import psutil
 import requests
-import time
-import argparse
 import torch
-import cProfile
-from math import floor
-import numpy as np
-from PIL import Image
-import torch.nn as nn
-import torch.multiprocessing
-import torch.distributed.autograd as dist_autograd
-import torch.distributed.rpc as rpc
-from torch.distributed.rpc.api import _delete_all_user_and_unforked_owner_rrefs
-from torch.distributed.rpc import RRef, _get_debug_info, _rref_context_get_debug_info
-from torch.nn import functional as F
+from torch import nn
+from torch.distributed import rpc
+from torch.distributed.rpc import RRef
 from transformers import ViTFeatureExtractor
 from transformer import TransformerShard
 
