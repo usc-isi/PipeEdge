@@ -1,15 +1,15 @@
-import torch
-import numpy as np
-import os
-import math
-import torch.nn as nn
-import threading
-import psutil
-import time
 import gc
 import logging
-from transformers import AutoConfig, ViTFeatureExtractor, ViTForImageClassification
-from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput,ViTIntermediate, ViTOutput
+import math
+import os
+import threading
+import time
+import numpy as np
+import psutil
+import torch
+from torch import nn
+from transformers import AutoConfig
+from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput, ViTIntermediate, ViTOutput
 
 #########################################################
 #           Define Model Parallel Transformer           #
