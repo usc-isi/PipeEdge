@@ -1,25 +1,16 @@
-import os
-import sys
+import argparse
 import gc
-import math
 import logging
-import threading
+import os
+import time
+# import cProfile
+from PIL import Image
 import psutil
 import requests
-import time
-import argparse
 import torch
-import cProfile
-from math import floor
-import numpy as np
-from PIL import Image
-import torch.nn as nn
-import torch.multiprocessing
-import torch.distributed.autograd as dist_autograd
-import torch.distributed.rpc as rpc
-from torch.distributed.rpc.api import _delete_all_user_and_unforked_owner_rrefs
-from torch.distributed.rpc import RRef, _get_debug_info, _rref_context_get_debug_info
-from torch.nn import functional as F
+from torch import nn
+from torch.distributed import rpc
+from torch.distributed.rpc import RRef
 from transformers import ViTFeatureExtractor
 from transformer import TransformerShard
 
@@ -50,7 +41,7 @@ class DistTransformer(nn.Module):
             x_rref = RRef(x)
             for i in range(self.world_size-1):
                 x_rref = self.rref_list[i].remote().forward(x_rref)
-            y_rref = self.rref_list[self.world_size-1].rpc_async().forward(x_rref)  
+            y_rref = self.rref_list[self.world_size-1].rpc_async().forward(x_rref)
             out_futures.append(y_rref)
         # res = torch.cat(torch.futures.wait_all(out_futures))
         # res = x_rref.to_here()
@@ -68,7 +59,7 @@ def run_master(model_name, world_size, split_size):
     latencies = []
     throughputs = []
     feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
-    ## for verification 
+    ## for verification
     # origin_model = ViTForImageClassification.from_pretrained(model_name)
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
@@ -76,7 +67,7 @@ def run_master(model_name, world_size, split_size):
         inputs = feature_extractor(images=imgs, return_tensors="pt")
         tik = time.time()
         for i in range(num_batches):
-            # generate random inputs and labels       
+            # generate random inputs and labels
             outputs = model(inputs['pixel_values'])
             print(f"outputs is {outputs}")
             logging.info(f"outputs is {outputs}")
@@ -90,7 +81,7 @@ def run_master(model_name, world_size, split_size):
         throughput = num_batches*batch_size / latency
         latencies.append(latency)
         throughputs.append(throughput)
-         
+
     best_choice = -1
     best_throughput  = -1
     for i in range(len(split_size)):
@@ -98,7 +89,7 @@ def run_master(model_name, world_size, split_size):
         logging.info(f"Split size {split_size[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
         if throughputs[i] > best_throughput:
             best_throughput = throughputs[i]
-            best_choice = i 
+            best_choice = i
     print("\n---------------- Split output line ----------------")
     print(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
     logging.info(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
@@ -106,7 +97,7 @@ def run_master(model_name, world_size, split_size):
 
 def run_worker(model_name, rank, world_size, num_split):
 
-    os.environ['MASTER_ADDR'] = args.addr #MASTER_ADDR 
+    os.environ['MASTER_ADDR'] = args.addr #MASTER_ADDR
     os.environ['MASTER_PORT'] = args.port # MASTER_PORT
     os.environ["TP_SOCKET_IFNAME"] = args.socket_ifname #SOCKET_IFNAME
     os.environ["GLOO_SOCKET_IFNAME"] = args.socket_ifname #SOCKET_IFNAME
@@ -134,7 +125,7 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime")
     parser.add_argument("rank", type=int, help="the rank for the current node")
     parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
-    parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224", choices=["google/vit-base-patch16-224", 
+    parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224", choices=["google/vit-base-patch16-224",
     "google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k"], help="the neural network model for loading")
     parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
     parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
@@ -147,7 +138,7 @@ if __name__=="__main__":
     parser.add_argument("-w", "--worker-threads", default=16, type=int, help="the number of worker threads for the communication backend")
     parser.add_argument("-sp", "--splits", default="8", help="the list of microbatch size")
     args = parser.parse_args()
-    torch.set_printoptions(profile=args.print,threshold=args.threshold)  
+    torch.set_printoptions(profile=args.print,threshold=args.threshold)
     ## Force pytorch use CPU
     device = torch.device('cpu')
     # parallel_threads = 2
@@ -180,7 +171,7 @@ if __name__=="__main__":
     model_name= args.model_name
 
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
-    
+
     tik = time.time()
     # cProfile.run("run_worker(model_name, rank, world_size, num_split)")
     run_worker(model_name, rank, world_size, num_split)

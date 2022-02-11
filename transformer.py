@@ -1,15 +1,15 @@
-import torch
-import numpy as np
-import os
-import math
-import torch.nn as nn
-import threading
-import psutil
-import time
 import gc
 import logging
-from transformers import AutoConfig, ViTFeatureExtractor, ViTForImageClassification
-from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput,ViTIntermediate, ViTOutput
+import math
+import os
+import threading
+import time
+import numpy as np
+import psutil
+import torch
+from torch import nn
+from transformers import AutoConfig
+from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput, ViTIntermediate, ViTOutput
 
 #########################################################
 #           Define Model Parallel Transformer           #
@@ -57,7 +57,7 @@ class TransformerShard(nn.Module):
         self._make_layer()
         print(f"======= Finish Build TransformerShard{self.rank} ==========")
         logging.info(f"======= Finish Build TransformerShard{self.rank} ==========")
-    
+
     def _make_layer(self):
         ## first Shard
         if self.is_first:
@@ -69,7 +69,7 @@ class TransformerShard(nn.Module):
 
         current_layer_idx = self.start_layer
 
-        ## first ununit part 
+        ## first ununit part
         if self.start_layer %4 != 1 or (self.start_layer+3 > self.end_layer):
             print(f">>>> For the first model part, load weight is {self.load_weight}:")
             for i in range(self.start_layer, min(self.end_layer, math.ceil(self.start_layer/4)*4)+1):
@@ -86,7 +86,7 @@ class TransformerShard(nn.Module):
             self.vit_layers.append(layer)
             print(f">>>> Load the {math.ceil(current_layer_idx/4)-1}-th ViT Layer, load weight is {self.load_weight}")
             current_layer_idx += 4
-        
+
         ## last unit part
         if self.end_layer >= current_layer_idx:
             print(f">>>> For the last model part, load weight is {self.load_weight}:")
@@ -96,7 +96,7 @@ class TransformerShard(nn.Module):
             if self.load_weight:
                 layer = self.load_layer_weights(math.ceil(i/4)-1, layer, False, False, True, i%4)
             self.last_ops.append(layer)
-        
+
         ## last Shard
         if self.is_last:
             num_label = self.config.num_labels
@@ -148,7 +148,7 @@ class TransformerShard(nn.Module):
             with torch.no_grad():
                 self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["Transformer/posembed_input/pos_embedding"])))
                 conv_weight = weights["embedding/kernel"]
-                O, I, J, K = conv_weight.shape
+                # O, I, J, K = conv_weight.shape
                 # print(f"conv_shape is {O, I, J, K}, pe weight shape is {self.embeddings.patch_embeddings.projection.weight.shape}")
                 # conv_weight = conv_weight.reshape(K,J,O,I)
                 conv_weight = conv_weight.transpose([3, 2, 0, 1])
@@ -160,17 +160,17 @@ class TransformerShard(nn.Module):
             with torch.no_grad():
                 self.layernorm.weight.copy_(torch.from_numpy(weights["Transformer/encoder_norm/scale"]))
                 self.layernorm.bias.copy_(torch.from_numpy(weights["Transformer/encoder_norm/bias"]))
-                # head_kernel = np.transpose(weights["head/kernel"])  
+                # head_kernel = np.transpose(weights["head/kernel"])
                 # print(f"classifier weight is {self.classifier.weight.shape}, head kernel weight shape is {head_kernel.shape}")
                 self.classifier.weight.copy_(torch.from_numpy(np.transpose(weights["head/kernel"])))
-                self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))  
-                # print(f">>>> Load Layernorm, classifier for the last shard")  
-                
+                self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))
+                # print(f">>>> Load Layernorm, classifier for the last shard")
+
 
         if load_first == False and load_last == False:
             with torch.no_grad():
                 if load_kernel == False:
-                
+
                     query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
                     print("query weight shape is ", query_weight.shape)
                     key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(self.hidden_size, self.hidden_size).t()
@@ -208,7 +208,7 @@ class TransformerShard(nn.Module):
                     transformer_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
                     print(f"memory {self.process.memory_info().rss // 1000000} MB")
 
-                   
+
                 elif kernel_id == 1:
 
                     query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
@@ -248,7 +248,7 @@ class TransformerShard(nn.Module):
                     transformer_layer[0].dense.bias.copy_(mlp_bias_1)
 
         return transformer_layer
-    
+
     def forward_kernel(self, layer, x, skip, kernel_id):
         if kernel_id == 1:
             x = layer[0](x)
@@ -284,7 +284,7 @@ class TransformerShard(nn.Module):
 
             for i, op in enumerate(self.first_ops):
                 x, skip = self.forward_kernel(op, x, skip, (self.start_layer+i)%4)
-            
+
             for i, layer in enumerate(self.vit_layers):
                 logging.info(f"Before {i}: {self.process.memory_info().rss / 1000000} MB")
                 x = layer(x)[0]
@@ -301,7 +301,6 @@ class TransformerShard(nn.Module):
                 x = self.layernorm(x)
                 x = self.classifier(x[:, 0, :])
             logging.info(f"Last memory {self.process.memory_info().rss / 1000000} MB")
-            time_stamp2 = time.time()
             if self.total_batch == 0:
                 self.batch_0_finish = time.time()
             else:
@@ -314,7 +313,7 @@ class TransformerShard(nn.Module):
             end = time.time()
             self.total_time +=  (end - start)
             self.total_batch += 1
-            
+
         print(f"Round {self.total_batch}: memory {self.process.memory_info().rss / 1000000} MB")
         print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         logging.info(f"Round {self.total_batch}: memory {self.process.memory_info().rss / 1000000} MB")
@@ -322,4 +321,3 @@ class TransformerShard(nn.Module):
         if self.is_last:
             return x
         return x, skip
-
