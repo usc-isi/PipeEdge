@@ -239,7 +239,6 @@ class TransformerShard(nn.Module):
                 else:
                     self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["Transformer/posembed_input/pos_embedding"])))
                     conv_weight = weights["embedding/kernel"]
-                    O, I, J, K = conv_weight.shape
                     conv_weight = conv_weight.transpose([3, 2, 0, 1])
                     self.embeddings.patch_embeddings.projection.weight.copy_(torch.from_numpy(conv_weight))
                     self.embeddings.patch_embeddings.projection.bias.copy_(torch.from_numpy(weights["embedding/bias"]))
@@ -448,13 +447,13 @@ class TransformerShard(nn.Module):
 
     @torch.no_grad()
     def forward(self, x_rref):
-        a = time.time()
+        # a = time.time()
         if self.is_first:
             x = x_rref.to_here()
             # print(f"\n---\n forward here is {x}")
         else:
             x, skip = x_rref.to_here()
-        b = time.time()
+        # b = time.time()
         # print(f"x ref is {b-a}")
         with self._lock:
             start = time.time()
