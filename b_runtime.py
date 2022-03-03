@@ -21,7 +21,7 @@ from transformers.models.bert.modeling_bert import BertEmbeddings, BertPooler, B
 parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime")
 parser.add_argument("rank", type=int, help="the rank for the current node")
 parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
-parser.add_argument("-m", "--model-name", type=str, default="bert-base-uncased", choices=["google/vit-base-patch16-224", 
+parser.add_argument("-m", "--model-name", type=str, default="bert-base-uncased", choices=["google/vit-base-patch16-224",
 "google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k", "bert-base-uncased", "bert-large-uncased"], help="the neural network model for loading")
 parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
 parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
@@ -35,7 +35,7 @@ parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size
 parser.add_argument("-w", "--worker-threads", default=128, type=int, help="the number of worker threads for the communication backend")
 parser.add_argument("-sp", "--splits", default="8", help="the list of microbatch size")
 args = parser.parse_args()
-torch.set_printoptions(profile=args.print,threshold=args.threshold)  
+torch.set_printoptions(profile=args.print,threshold=args.threshold)
 ## Force pytorch use CPU
 device = torch.device('cpu')
 # parallel_threads = 2
@@ -97,7 +97,7 @@ class TransformerShard(nn.Module):
             print(f">>>> Load weight file {self.weights_file_name}")
         self._make_layer()
         print(f"======= Finish Build TransformerShard{self.rank} ==========")
-    
+
     def _make_layer(self):
         ## first Shard
         if self.is_first:
@@ -114,7 +114,7 @@ class TransformerShard(nn.Module):
 
         current_layer_idx = self.start_layer
 
-        ## first ununit part 
+        ## first ununit part
         if self.start_layer %4 != 1 or (self.start_layer+3 > self.end_layer):
             print(f">>>> For the first model part, load weight is {self.load_weight}:")
             for i in range(self.start_layer, min(self.end_layer, math.ceil(self.start_layer/4)*4)+1):
@@ -137,7 +137,7 @@ class TransformerShard(nn.Module):
             self.vit_layers.append(layer)
             print(f">>>> Load the {math.ceil(current_layer_idx/4)-1}-th {self.model_name} Layer, load weight is {self.load_weight}")
             current_layer_idx += 4
-        
+
         ## last unit part
         if self.end_layer >= current_layer_idx:
             print(f">>>> For the last model part, load weight is {self.load_weight}:")
@@ -182,18 +182,18 @@ class TransformerShard(nn.Module):
                 layers.append(ViTSelfAttention(self.config))
         elif kernel_id == 2:
             if self.model_name == "bert-base-uncased" or 'bert-large-uncased':
-                layers.append(BertSelfOutput(self.config)) 
+                layers.append(BertSelfOutput(self.config))
             else:
                 layers.append(ViTSelfOutput(self.config))
         elif kernel_id == 3:
             if self.model_name == "bert-base-uncased" or 'bert-large-uncased':
-                layers.append(BertIntermediate(self.config)) 
+                layers.append(BertIntermediate(self.config))
             else:
                 layers.append(nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps))
                 layers.append( ViTIntermediate(self.config))
         else:
             if self.model_name == "bert-base-uncased" or 'bert-large-uncased':
-                layers.append(BertOutput(self.config)) 
+                layers.append(BertOutput(self.config))
             else:
                 layers.append(ViTOutput(self.config))
         if load_weight:
@@ -253,11 +253,11 @@ class TransformerShard(nn.Module):
                 else:
                     self.layernorm.weight.copy_(torch.from_numpy(weights["Transformer/encoder_norm/scale"]))
                     self.layernorm.bias.copy_(torch.from_numpy(weights["Transformer/encoder_norm/bias"]))
-                    head_kernel = np.transpose(weights["head/kernel"])  
+                    head_kernel = np.transpose(weights["head/kernel"])
                     # print(f"classifier weight is {self.classifier.weight.shape}, head kernel weight shape is {head_kernel.shape}")
                     self.classifier.weight.copy_(torch.from_numpy(head_kernel))
-                    self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))  
-                    # print(f">>>> Load Layernorm, classifier for the last shard")  
+                    self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))
+                    # print(f">>>> Load Layernorm, classifier for the last shard")
 
         if not load_first and not load_last:
             with torch.no_grad():
@@ -337,7 +337,7 @@ class TransformerShard(nn.Module):
                         transformer_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
                         transformer_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
                     print(f"memory {process.memory_info().rss // 1000000} MB")
-                    
+
                 elif kernel_id == 1:
 
                     if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
@@ -416,7 +416,7 @@ class TransformerShard(nn.Module):
                         transformer_layer[0].dense.weight.copy_(mlp_weight_1)
                         transformer_layer[0].dense.bias.copy_(mlp_bias_1)
         return transformer_layer
-    
+
     def forward_kernel(self, layer, x, skip, kernel_id):
         if kernel_id == 1:
             if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
@@ -525,7 +525,7 @@ class DistTransformer(nn.Module):
             x_rref = RRef(x)
             for i in range(self.world_size-1):
                 x_rref = self.rref_list[i].remote().forward(x_rref)
-            y_rref = self.rref_list[self.world_size-1].rpc_async().forward(x_rref)  
+            y_rref = self.rref_list[self.world_size-1].rpc_async().forward(x_rref)
             out_futures.append(y_rref)
         # res = torch.cat(torch.futures.wait_all(out_futures))
         # res = x_rref.to_here()
@@ -544,14 +544,14 @@ def run_master(model_name, model_file, world_size, split_size,batch_size):
     latencies = []
     throughputs = []
     bert_inputs = np.load("bert_input.npz")['input']
-    ## for verification 
+    ## for verification
     # origin_model = ViTForImageClassification.from_pretrained(model_name)
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
         model =  DistTransformer(model_name, model_file, world_size, split_size[si])
         if model_name == 'bert-base-uncased' or 'bert-large-uncased':
             tokenizer = BertTokenizer.from_pretrained(model_name)
-            inputs_sentence = list(bert_inputs[0: batch_size]) 
+            inputs_sentence = list(bert_inputs[0: batch_size])
             print(len(inputs_sentence))
             inputs = tokenizer(inputs_sentence, padding=True,truncation=True,
                   return_tensors="pt")
@@ -569,11 +569,10 @@ def run_master(model_name, model_file, world_size, split_size,batch_size):
 
         tik = time.time()
         for i in range(num_batches):
-        #     # generate random inputs and labels   
-            if model_name == 'bert-base-uncased' or 'bert-large-uncased': 
-                
+        #     # generate random inputs and labels
+            if model_name == 'bert-base-uncased' or 'bert-large-uncased':
                 outputs = model(inputs)
-        #     else:  
+        #     else:
         #         outputs = model(inputs['pixel_values'])
         #     # print(f"outputs is {outputs}")
             # predicted_class_idx = outputs[0].argmax(-1).item()
@@ -585,14 +584,14 @@ def run_master(model_name, model_file, world_size, split_size,batch_size):
         # print(f"Split size is {split_size[si]}, Total program execution time = {tok - tik}")
         latencies.append(latency)
         throughputs.append(throughput)
-         
+
     best_choice = -1
     best_throughput  = -1
     for i in range(len(split_size)):
         print(f"Split size {split_size[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
         if throughputs[i] > best_throughput:
             best_throughput = throughputs[i]
-            best_choice = i 
+            best_choice = i
     print("\n---------------- Split output line ----------------")
     print(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
 
@@ -638,7 +637,7 @@ if __name__=="__main__":
         model_file = model_files_default[model_name]
 
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
-    
+
     tik = time.time()
     run_worker(model_name, model_file, rank, world_size, num_split,batch_size)
     tok = time.time()
