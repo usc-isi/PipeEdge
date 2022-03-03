@@ -524,8 +524,8 @@ class DistTransformer(nn.Module):
             # x = torch.stack((x, skip), 0)
             x_rref = RRef(x)
             for i in range(self.world_size-1):
-                x_rref = self.rref_list[i].remote().forward(x_rref)
-            y_rref = self.rref_list[self.world_size-1].rpc_async().forward(x_rref)
+                x_rref = self.rref_list[i].remote().__call__(x_rref)
+            y_rref = self.rref_list[self.world_size-1].rpc_async().__call__(x_rref)
             out_futures.append(y_rref)
         # res = torch.cat(torch.futures.wait_all(out_futures))
         # res = x_rref.to_here()
