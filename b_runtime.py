@@ -82,11 +82,13 @@ class TransformerShard(nn.Module):
         self.classifier = None
         self.start_layer = start_layer
         self.end_layer = end_layer
-        self.total_data = 0
+
         self.load_weight = load_weight
         self._lock = threading.Lock()
         self.total_time = 0
         self.total_batch = 0
+        self.total_data = 0
+        self.batch_0_finish = 0
 
         ## operations/transformer layers set
         self.first_ops = nn.ModuleList()
