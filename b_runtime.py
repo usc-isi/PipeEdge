@@ -232,7 +232,7 @@ class TransformerShard(nn.Module):
             FC_1 = "MlpBlock_3/Dense_1"
             ATTENTION_NORM = "LayerNorm_0"
             MLP_NORM = "LayerNorm_2"
-        self.hidden_size = self.config.hidden_size
+        hidden_size = self.config.hidden_size
         if load_first:
             with torch.no_grad():
                 if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
@@ -308,10 +308,10 @@ class TransformerShard(nn.Module):
                         transformer_layer.output.LayerNorm.bias.copy_(layernorm_bias)
 
                     else:
-                        query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-                        key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-                        value_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-                        out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(self.hidden_size, self.hidden_size).t()
+                        query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(hidden_size, hidden_size).t()
+                        key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(hidden_size, hidden_size).t()
+                        value_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "kernel")]).view(hidden_size, hidden_size).t()
+                        out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(hidden_size, hidden_size).t()
 
                         query_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "bias")]).view(-1)
                         key_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "bias")]).view(-1)
@@ -360,9 +360,9 @@ class TransformerShard(nn.Module):
                         transformer_layer[0].key.bias.copy_(key_bias)
                         transformer_layer[0].value.bias.copy_(value_bias)
                     else:
-                        query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-                        key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-                        value_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "kernel")]).view(self.hidden_size, self.hidden_size).t()
+                        query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(hidden_size, hidden_size).t()
+                        key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(hidden_size, hidden_size).t()
+                        value_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "kernel")]).view(hidden_size, hidden_size).t()
 
                         query_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "bias")]).view(-1)
                         key_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "bias")]).view(-1)
@@ -388,7 +388,7 @@ class TransformerShard(nn.Module):
                         transformer_layer[0].dense.bias.copy_(out_dense_bias)
                         transformer_layer[0].LayerNorm.bias.copy_(output_layernorm_bias)
                     else:
-                        out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(self.hidden_size, self.hidden_size).t()
+                        out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(hidden_size, hidden_size).t()
                         out_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "bias")]).view(-1)
                         transformer_layer[0].dense.weight.copy_(out_weight)
                         transformer_layer[0].dense.bias.copy_(out_bias)
