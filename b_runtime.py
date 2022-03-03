@@ -29,6 +29,7 @@ parser.add_argument("rank", type=int, help="the rank for the current node")
 parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
 parser.add_argument("-m", "--model-name", type=str, default="bert-base-uncased", choices=["google/vit-base-patch16-224", 
 "google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k", "bert-base-uncased", "bert-large-uncased"], help="the neural network model for loading")
+parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
 parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
 parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
 parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
@@ -73,11 +74,12 @@ imgs = [image for i in range(batch_size)]
 #           Define Model Parallel Transformer           #
 #########################################################
 class TransformerShard(nn.Module):
-    def __init__(self, rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
+    def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
         super(TransformerShard, self).__init__()
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
         print(f">>>> Model name {model_name}")
+        self.weights_file_name = model_file
         self.rank = rank
         self.is_first = is_first
         self.is_last = is_last
@@ -97,17 +99,6 @@ class TransformerShard(nn.Module):
         self.vit_layers = nn.ModuleList()
         self.last_ops = nn.ModuleList()
 
-        ## weight file anme
-        if self.model_name == 'google/vit-base-patch16-224':
-            self.weights_file_name = 'ViT-B_16-224.npz'
-        elif self.model_name == 'google/vit-large-patch16-224':
-            self.weights_file_name = 'ViT-L_16-224.npz'
-        elif self.model_name == 'google/vit-huge-patch14-224-in21k':
-            self.weights_file_name = 'ViT-H_14.npz'
-        elif self.model_name == 'bert-base-uncased':
-            self.weights_file_name = 'BERT-B.npz'
-        elif self.model_name == 'bert-large-uncased':
-            self.weights_file_name = 'BERT-L.npz'
         if self.load_weight:
             print(f">>>> Load weight file {self.weights_file_name}")
         self._make_layer()
@@ -520,7 +511,7 @@ class TransformerShard(nn.Module):
 #             Stitch Shards into one Module             #
 #########################################################
 class DistTransformer(nn.Module):
-    def __init__(self, model_name, world_size, num_split):
+    def __init__(self, model_name, model_file, world_size, num_split):
         super(DistTransformer, self).__init__()
         self.world_size = world_size
         self.num_split = num_split
@@ -529,7 +520,7 @@ class DistTransformer(nn.Module):
             # Build Transformer Shard
             is_first = i == 0
             is_last = i == world_size-1
-            rref = rpc.remote(f"worker{i}", TransformerShard, args=(i, model_name, is_first, is_last, partition[2*i], partition[2*i+1], True))
+            rref = rpc.remote(f"worker{i}", TransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
             self.rref_list.append(rref)
 
     def forward(self, xs):
@@ -554,7 +545,7 @@ class DistTransformer(nn.Module):
 #                   Run RPC Processes                   #
 #########################################################
 
-def run_master(model_name, world_size, split_size,batch_size):
+def run_master(model_name, model_file, world_size, split_size,batch_size):
     print("Run mastering \n")
     latencies = []
     throughputs = []
@@ -563,7 +554,7 @@ def run_master(model_name, world_size, split_size,batch_size):
     # origin_model = ViTForImageClassification.from_pretrained(model_name)
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
-        model =  DistTransformer(model_name, world_size, split_size[si])
+        model =  DistTransformer(model_name, model_file, world_size, split_size[si])
         if model_name == 'bert-base-uncased' or 'bert-large-uncased':
             tokenizer = BertTokenizer.from_pretrained(model_name)
             inputs_sentence = list(bert_inputs[0: batch_size]) 
@@ -612,7 +603,7 @@ def run_master(model_name, world_size, split_size,batch_size):
     print(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
 
 
-def run_worker(model_name, rank, world_size, num_split,batch_size):
+def run_worker(model_name, model_file, rank, world_size, num_split,batch_size):
 
     os.environ['MASTER_ADDR'] = args.addr #MASTER_ADDR #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
     os.environ['MASTER_PORT'] = args.port # MASTER_PORT
@@ -630,7 +621,7 @@ def run_worker(model_name, rank, world_size, num_split,batch_size):
         rpc_backend_options=options
     )
     if rank == 0:
-        run_master(model_name, world_size, num_split,batch_size)
+        run_master(model_name, model_file, world_size, num_split,batch_size)
 
     # block until all rpcs finisha
     rpc.shutdown()
@@ -641,9 +632,20 @@ if __name__=="__main__":
     num_split = [int(i) for i in args.splits.split(',')]
     model_name= args.model_name
 
+    model_files_default = {
+        'google/vit-base-patch16-224': 'ViT-B_16-224.npz',
+        'google/vit-large-patch16-224':'ViT-L_16-224.npz',
+        'google/vit-huge-patch14-224-in21k': 'ViT-H_14.npz',
+        'bert-base-uncased': 'BERT-B.npz',
+        'bert-large-uncased': 'BERT-L.npz',
+    }
+    model_file = args.model_file
+    if model_file is None:
+        model_file = model_files_default[model_name]
+
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
     
     tik = time.time()
-    run_worker(model_name, rank, world_size, num_split,batch_size)
+    run_worker(model_name, model_file, rank, world_size, num_split,batch_size)
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")

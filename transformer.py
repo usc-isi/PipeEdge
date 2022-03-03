@@ -15,13 +15,14 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 #           Define Model Parallel Transformer           #
 #########################################################
 class TransformerShard(nn.Module):
-    def __init__(self, rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
+    def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
         super(TransformerShard, self).__init__()
         self.operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
         self.process = psutil.Process(os.getpid())
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
         print(f">>>> Model name {model_name}")
+        self.weights_file_name = model_file
         self.rank = rank
         self.is_first = is_first
         self.is_last = is_last
@@ -43,13 +44,6 @@ class TransformerShard(nn.Module):
         self.vit_layers = nn.ModuleList()
         self.last_ops = nn.ModuleList()
 
-        ## weight file anme
-        if self.model_name == 'google/vit-base-patch16-224':
-            self.weights_file_name = 'ViT-B_16-224.npz'
-        elif self.model_name == 'google/vit-large-patch16-224':
-            self.weights_file_name = 'ViT-L_16-224.npz'
-        elif self.model_name == 'google/vit-huge-patch14-224-in21k':
-            self.weights_file_name = 'ViT-H_14.npz'
         if self.load_weight:
             print(f">>>> Load weight file {self.weights_file_name}")
             logging.info(f">>>> Load weight file f{self.weights_file_name}")
