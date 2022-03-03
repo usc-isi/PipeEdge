@@ -160,9 +160,9 @@ class TransformerShard(nn.Module):
                 # print(f">>>> Load Layernorm, classifier for the last shard")
 
 
-        if load_first == False and load_last == False:
+        if not load_first and not load_last:
             with torch.no_grad():
-                if load_kernel == False:
+                if not load_kernel:
 
                     query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(hidden_size, hidden_size).t()
                     print("query weight shape is ", query_weight.shape)

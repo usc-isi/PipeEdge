@@ -265,9 +265,9 @@ class TransformerShard(nn.Module):
                     self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))  
                     # print(f">>>> Load Layernorm, classifier for the last shard")  
 
-        if load_first == False and load_last == False:
+        if not load_first and not load_last:
             with torch.no_grad():
-                if load_kernel == False:
+                if not load_kernel:
                     if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
                         query_weight = torch.from_numpy(weights[ROOT + ATTENTION_Q + WEIGHT])
                         key_weight = torch.from_numpy(weights[ROOT + ATTENTION_K + WEIGHT])
