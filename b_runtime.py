@@ -1,25 +1,19 @@
-import os
-import sys
-import gc
-import math
-import threading
-import psutil
-import requests
-import time
 import argparse
-import torch
-from math import floor
+import math
+import os
+import threading
+import time
 import numpy as np
 from PIL import Image
-import torch.nn as nn
-import torch.distributed.autograd as dist_autograd
-import torch.distributed.rpc as rpc
-from torch.distributed.rpc.api import _delete_all_user_and_unforked_owner_rrefs
-from torch.distributed.rpc import RRef, _get_debug_info, _rref_context_get_debug_info
-from torch.nn import functional as F
-from transformers import AutoConfig, ViTFeatureExtractor, BertTokenizer,ViTForImageClassification
-from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput,ViTIntermediate, ViTOutput
-from transformers.models.bert.modeling_bert import BertEmbeddings,BertPooler,BertSelfAttention,BertSelfOutput,BertIntermediate,BertOutput,BertLayer
+import psutil
+import requests
+import torch
+from torch import nn
+from torch.distributed import rpc
+from torch.distributed.rpc import RRef
+from transformers import AutoConfig, ViTFeatureExtractor, BertTokenizer
+from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput, ViTIntermediate, ViTOutput
+from transformers.models.bert.modeling_bert import BertEmbeddings, BertPooler, BertSelfAttention, BertSelfOutput, BertIntermediate, BertOutput, BertLayer
 
 #########################################################
 #                 Check Enviroment Settings             #
