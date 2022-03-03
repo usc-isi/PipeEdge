@@ -75,7 +75,7 @@ imgs = [image for i in range(batch_size)]
 #########################################################
 class TransformerShard(nn.Module):
     def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
-        super(TransformerShard, self).__init__()
+        super().__init__()
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
         print(f">>>> Model name {model_name}")
@@ -512,7 +512,7 @@ class TransformerShard(nn.Module):
 #########################################################
 class DistTransformer(nn.Module):
     def __init__(self, model_name, model_file, world_size, num_split):
-        super(DistTransformer, self).__init__()
+        super().__init__()
         self.world_size = world_size
         self.num_split = num_split
         self.rref_list = []

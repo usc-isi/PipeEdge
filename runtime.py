@@ -22,7 +22,7 @@ logging.basicConfig(filename='runtime.log',level=logging.INFO)
 #########################################################
 class DistTransformer(nn.Module):
     def __init__(self, model_name, model_file, world_size, num_split):
-        super(DistTransformer, self).__init__()
+        super().__init__()
         self.world_size = world_size
         self.num_split = num_split
         self.rref_list = []
