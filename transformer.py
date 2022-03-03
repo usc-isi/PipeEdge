@@ -17,7 +17,6 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 class TransformerShard(nn.Module):
     def __init__(self, rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
         super(TransformerShard, self).__init__()
-        logging.basicConfig(filename='runtime.log',level=logging.INFO)
         self.operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
         self.process = psutil.Process(os.getpid())
         self.model_name = model_name
