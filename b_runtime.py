@@ -12,13 +12,13 @@ from torch import nn
 from torch.distributed import rpc
 from torch.distributed.rpc import RRef
 from transformers import AutoConfig, ViTFeatureExtractor, BertTokenizer
-from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput, ViTIntermediate, ViTOutput
 from transformers.models.bert.modeling_bert import BertEmbeddings, BertPooler, BertSelfAttention, BertSelfOutput, BertIntermediate, BertOutput, BertLayer
+from transformer import ViTTransformerShard
 
 #########################################################
 #           Define Model Parallel Transformer           #
 #########################################################
-class TransformerShard(nn.Module):
+class BertTransformerShard(nn.Module):
     def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
         super().__init__()
         self.operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
@@ -51,16 +51,12 @@ class TransformerShard(nn.Module):
         if self.load_weight:
             print(f">>>> Load weight file {self.weights_file_name}")
         self._make_layer()
-        print(f"======= Finish Build TransformerShard{self.rank} ==========")
+        print(f"======= Finish Build BertTransformerShard{self.rank} ==========")
 
     def _make_layer(self):
         ## first Shard
         if self.is_first:
-            if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-
-                self.embeddings = BertEmbeddings(self.config)
-            else:
-                self.embeddings = ViTEmbeddings(self.config)
+            self.embeddings = BertEmbeddings(self.config)
             self.embeddings.eval()
             print(f">>>> Load embeddings layer for the first shard ")
             if self.load_weight:
@@ -81,11 +77,8 @@ class TransformerShard(nn.Module):
 
         ## mid unit part, the whole vit_layer
         while current_layer_idx + 3 <= self.end_layer:
-            if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                with torch.no_grad():
-                    layer = BertLayer(self.config)
-            else:
-                layer = ViTLayer(self.config)
+            with torch.no_grad():
+                layer = BertLayer(self.config)
             if self.load_weight:
                 layer = self.load_layer_weights(math.ceil(current_layer_idx/4)-1, layer)
             layer.eval()
@@ -106,17 +99,8 @@ class TransformerShard(nn.Module):
 
         ## last Shard
         if self.is_last:
-            if self.model_name == "bert-base-uncased" or 'bert-large-uncased':
-                self.bertpooler = BertPooler(self.config)
-                self.bertpooler.eval()
-            else:
-                num_label = self.config.num_labels
-                self.layernorm = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
-                print(f">>>> Load layernorm for the last shard")
-                if self.model_name == 'google/vit-huge-patch14-224-in21k':
-                    num_label = 21843
-                self.classifier = nn.Linear(self.config.hidden_size, num_label) if self.config.num_labels > 0 else nn.Identity()
-                print(f">>>> Load classifier for the last shard")
+            self.bertpooler = BertPooler(self.config)
+            self.bertpooler.eval()
             if self.load_weight:
                 self.load_layer_weights(0, None, load_first = False, load_last=True, load_kernel = False, kernel_id=None)
                 print(">>>> Load weights for layernorm and last shard")
@@ -130,270 +114,138 @@ class TransformerShard(nn.Module):
     def _build_kernel(self, kernel_id, vit_layer_id, load_weight=True):
         layers = nn.ModuleList()
         if kernel_id == 1:
-            if self.model_name == "bert-base-uncased" or 'bert-large-uncased':
-                layers.append(BertSelfAttention(self.config))
-            else:
-                layers.append(nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps))
-                layers.append(ViTSelfAttention(self.config))
+            layers.append(BertSelfAttention(self.config))
         elif kernel_id == 2:
-            if self.model_name == "bert-base-uncased" or 'bert-large-uncased':
-                layers.append(BertSelfOutput(self.config))
-            else:
-                layers.append(ViTSelfOutput(self.config))
+            layers.append(BertSelfOutput(self.config))
         elif kernel_id == 3:
-            if self.model_name == "bert-base-uncased" or 'bert-large-uncased':
-                layers.append(BertIntermediate(self.config))
-            else:
-                layers.append(nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps))
-                layers.append( ViTIntermediate(self.config))
+            layers.append(BertIntermediate(self.config))
         else:
-            if self.model_name == "bert-base-uncased" or 'bert-large-uncased':
-                layers.append(BertOutput(self.config))
-            else:
-                layers.append(ViTOutput(self.config))
+            layers.append(BertOutput(self.config))
         if load_weight:
             self.load_layer_weights(vit_layer_id, layers, False, False, load_weight, kernel_id)
         return layers
 
     def load_layer_weights(self, id, transformer_layer, load_first = False, load_last=False, load_kernel = False, kernel_id=None):
         weights = np.load(self.weights_file_name)
-        if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-            ROOT = f"encoder.layer.{id}."
-        else:
-            ROOT = f"Transformer/encoderblock_{id}"
-        if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-            ATTENTION_Q = "attention.self.query."
-            ATTENTION_K = "attention.self.key."
-            ATTENTION_V = "attention.self.value."
-            ATTENTION_OUT_DENSE = "attention.output.dense."
-            ATTENTION_OUT_LAYERNORM = "attention.output.LayerNorm."
-            INTERMEDIATE = "intermediate.dense."
-            OUTPUT_DENSE = "output.dense."
-            OUTPUT_LAYER = "output.LayerNorm."
-            WEIGHT = "weight"
-            BIAS = "bias"
-        else:
-            ATTENTION_Q = "MultiHeadDotProductAttention_1/query"
-            ATTENTION_K = "MultiHeadDotProductAttention_1/key"
-            ATTENTION_V = "MultiHeadDotProductAttention_1/value"
-            ATTENTION_OUT = "MultiHeadDotProductAttention_1/out"
-            FC_0 = "MlpBlock_3/Dense_0"
-            FC_1 = "MlpBlock_3/Dense_1"
-            ATTENTION_NORM = "LayerNorm_0"
-            MLP_NORM = "LayerNorm_2"
-        hidden_size = self.config.hidden_size
+        ROOT = f"encoder.layer.{id}."
+        ATTENTION_Q = "attention.self.query."
+        ATTENTION_K = "attention.self.key."
+        ATTENTION_V = "attention.self.value."
+        ATTENTION_OUT_DENSE = "attention.output.dense."
+        ATTENTION_OUT_LAYERNORM = "attention.output.LayerNorm."
+        INTERMEDIATE = "intermediate.dense."
+        OUTPUT_DENSE = "output.dense."
+        OUTPUT_LAYER = "output.LayerNorm."
+        WEIGHT = "weight"
+        BIAS = "bias"
         if load_first:
             with torch.no_grad():
-                if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                    self.embeddings.position_ids.copy_(torch.from_numpy((weights["embeddings.position_ids"])))
-                    self.embeddings.word_embeddings.weight.copy_(torch.from_numpy(weights['embeddings.word_embeddings.weight']))
-                    self.embeddings.position_embeddings.weight.copy_(torch.from_numpy(weights['embeddings.position_embeddings.weight']))
-                    self.embeddings.token_type_embeddings.weight.copy_(torch.from_numpy(weights['embeddings.token_type_embeddings.weight']))
-                    self.embeddings.LayerNorm.weight.copy_(torch.from_numpy(weights['embeddings.LayerNorm.weight']))
-                    self.embeddings.LayerNorm.bias.copy_(torch.from_numpy(weights['embeddings.LayerNorm.bias']))
-                else:
-                    self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["Transformer/posembed_input/pos_embedding"])))
-                    conv_weight = weights["embedding/kernel"]
-                    conv_weight = conv_weight.transpose([3, 2, 0, 1])
-                    self.embeddings.patch_embeddings.projection.weight.copy_(torch.from_numpy(conv_weight))
-                    self.embeddings.patch_embeddings.projection.bias.copy_(torch.from_numpy(weights["embedding/bias"]))
-
+                self.embeddings.position_ids.copy_(torch.from_numpy((weights["embeddings.position_ids"])))
+                self.embeddings.word_embeddings.weight.copy_(torch.from_numpy(weights['embeddings.word_embeddings.weight']))
+                self.embeddings.position_embeddings.weight.copy_(torch.from_numpy(weights['embeddings.position_embeddings.weight']))
+                self.embeddings.token_type_embeddings.weight.copy_(torch.from_numpy(weights['embeddings.token_type_embeddings.weight']))
+                self.embeddings.LayerNorm.weight.copy_(torch.from_numpy(weights['embeddings.LayerNorm.weight']))
+                self.embeddings.LayerNorm.bias.copy_(torch.from_numpy(weights['embeddings.LayerNorm.bias']))
 
         if load_last:
             with torch.no_grad():
-                if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                    self.bertpooler.dense.weight.copy_(torch.from_numpy(weights["pooler.dense.weight"]))
-                    self.bertpooler.dense.bias.copy_(torch.from_numpy(weights['pooler.dense.bias']))
-                else:
-                    self.layernorm.weight.copy_(torch.from_numpy(weights["Transformer/encoder_norm/scale"]))
-                    self.layernorm.bias.copy_(torch.from_numpy(weights["Transformer/encoder_norm/bias"]))
-                    head_kernel = np.transpose(weights["head/kernel"])
-                    # print(f"classifier weight is {self.classifier.weight.shape}, head kernel weight shape is {head_kernel.shape}")
-                    self.classifier.weight.copy_(torch.from_numpy(head_kernel))
-                    self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))
-                    # print(f">>>> Load Layernorm, classifier for the last shard")
+                self.bertpooler.dense.weight.copy_(torch.from_numpy(weights["pooler.dense.weight"]))
+                self.bertpooler.dense.bias.copy_(torch.from_numpy(weights['pooler.dense.bias']))
+
 
         if not load_first and not load_last:
             with torch.no_grad():
                 if not load_kernel:
-                    if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                        query_weight = torch.from_numpy(weights[ROOT + ATTENTION_Q + WEIGHT])
-                        key_weight = torch.from_numpy(weights[ROOT + ATTENTION_K + WEIGHT])
-                        value_weight = torch.from_numpy(weights[ROOT + ATTENTION_V + WEIGHT])
-                        out_dense_weight = torch.from_numpy(weights[ROOT + ATTENTION_OUT_DENSE + WEIGHT])
-                        output_layernorm_weight = torch.from_numpy(weights[ROOT + ATTENTION_OUT_LAYERNORM + WEIGHT])
-                        intermediate_dense_weight = torch.from_numpy(weights[ROOT+INTERMEDIATE+WEIGHT])
-                        dense_weight = torch.from_numpy(weights[ROOT + OUTPUT_DENSE + WEIGHT])
-                        layernorm_weight = torch.from_numpy(weights[ROOT + OUTPUT_LAYER + WEIGHT])
+                    query_weight = torch.from_numpy(weights[ROOT + ATTENTION_Q + WEIGHT])
+                    key_weight = torch.from_numpy(weights[ROOT + ATTENTION_K + WEIGHT])
+                    value_weight = torch.from_numpy(weights[ROOT + ATTENTION_V + WEIGHT])
+                    out_dense_weight = torch.from_numpy(weights[ROOT + ATTENTION_OUT_DENSE + WEIGHT])
+                    output_layernorm_weight = torch.from_numpy(weights[ROOT + ATTENTION_OUT_LAYERNORM + WEIGHT])
+                    intermediate_dense_weight = torch.from_numpy(weights[ROOT+INTERMEDIATE+WEIGHT])
+                    dense_weight = torch.from_numpy(weights[ROOT + OUTPUT_DENSE + WEIGHT])
+                    layernorm_weight = torch.from_numpy(weights[ROOT + OUTPUT_LAYER + WEIGHT])
 
-                        query_bias = torch.from_numpy(weights[ROOT + ATTENTION_Q + BIAS])
-                        key_bias = torch.from_numpy(weights[ROOT + ATTENTION_K + BIAS])
-                        value_bias = torch.from_numpy(weights[ROOT + ATTENTION_V + BIAS])
-                        out_dense_bias = torch.from_numpy(weights[ROOT + ATTENTION_OUT_DENSE + BIAS])
-                        output_layernorm_bias = torch.from_numpy(weights[ROOT + ATTENTION_OUT_LAYERNORM + BIAS])
-                        intermediate_dense_bias = torch.from_numpy(weights[ROOT+INTERMEDIATE+BIAS])
-                        dense_bias = torch.from_numpy(weights[ROOT + OUTPUT_DENSE + BIAS])
-                        layernorm_bias = torch.from_numpy(weights[ROOT + OUTPUT_LAYER + BIAS])
+                    query_bias = torch.from_numpy(weights[ROOT + ATTENTION_Q + BIAS])
+                    key_bias = torch.from_numpy(weights[ROOT + ATTENTION_K + BIAS])
+                    value_bias = torch.from_numpy(weights[ROOT + ATTENTION_V + BIAS])
+                    out_dense_bias = torch.from_numpy(weights[ROOT + ATTENTION_OUT_DENSE + BIAS])
+                    output_layernorm_bias = torch.from_numpy(weights[ROOT + ATTENTION_OUT_LAYERNORM + BIAS])
+                    intermediate_dense_bias = torch.from_numpy(weights[ROOT+INTERMEDIATE+BIAS])
+                    dense_bias = torch.from_numpy(weights[ROOT + OUTPUT_DENSE + BIAS])
+                    layernorm_bias = torch.from_numpy(weights[ROOT + OUTPUT_LAYER + BIAS])
 
-                        transformer_layer.attention.self.query.weight.copy_(query_weight)
-                        transformer_layer.attention.self.key.weight.copy_(key_weight)
-                        transformer_layer.attention.self.value.weight.copy_(value_weight)
-                        transformer_layer.attention.output.dense.weight.copy_(out_dense_weight)
-                        transformer_layer.attention.output.LayerNorm.weight.copy_(output_layernorm_weight)
+                    transformer_layer.attention.self.query.weight.copy_(query_weight)
+                    transformer_layer.attention.self.key.weight.copy_(key_weight)
+                    transformer_layer.attention.self.value.weight.copy_(value_weight)
+                    transformer_layer.attention.output.dense.weight.copy_(out_dense_weight)
+                    transformer_layer.attention.output.LayerNorm.weight.copy_(output_layernorm_weight)
 
-                        transformer_layer.attention.self.query.bias.copy_(query_bias)
-                        transformer_layer.attention.self.key.bias.copy_(key_bias)
-                        transformer_layer.attention.self.value.bias.copy_(value_bias)
-                        transformer_layer.attention.output.dense.bias.copy_(out_dense_bias)
-                        transformer_layer.attention.output.LayerNorm.bias.copy_(output_layernorm_bias)
+                    transformer_layer.attention.self.query.bias.copy_(query_bias)
+                    transformer_layer.attention.self.key.bias.copy_(key_bias)
+                    transformer_layer.attention.self.value.bias.copy_(value_bias)
+                    transformer_layer.attention.output.dense.bias.copy_(out_dense_bias)
+                    transformer_layer.attention.output.LayerNorm.bias.copy_(output_layernorm_bias)
 
-                        transformer_layer.intermediate.dense.weight.copy_(intermediate_dense_weight)
-                        transformer_layer.intermediate.dense.bias.copy_(intermediate_dense_bias )
+                    transformer_layer.intermediate.dense.weight.copy_(intermediate_dense_weight)
+                    transformer_layer.intermediate.dense.bias.copy_(intermediate_dense_bias )
 
-                        transformer_layer.output.dense.weight.copy_(dense_weight)
-                        transformer_layer.output.dense.bias.copy_(dense_bias)
-                        transformer_layer.output.LayerNorm.weight.copy_(layernorm_weight)
-                        transformer_layer.output.LayerNorm.bias.copy_(layernorm_bias)
-
-                    else:
-                        query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(hidden_size, hidden_size).t()
-                        key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(hidden_size, hidden_size).t()
-                        value_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "kernel")]).view(hidden_size, hidden_size).t()
-                        out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(hidden_size, hidden_size).t()
-
-                        query_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "bias")]).view(-1)
-                        key_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "bias")]).view(-1)
-                        value_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "bias")]).view(-1)
-                        out_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "bias")]).view(-1)
-
-                        transformer_layer.attention.attention.query.weight.copy_(query_weight)
-                        transformer_layer.attention.attention.key.weight.copy_(key_weight)
-                        transformer_layer.attention.attention.value.weight.copy_(value_weight)
-                        transformer_layer.attention.output.dense.weight.copy_(out_weight)
-
-                        transformer_layer.attention.attention.query.bias.copy_(query_bias)
-                        transformer_layer.attention.attention.key.bias.copy_(key_bias)
-                        transformer_layer.attention.attention.value.bias.copy_(value_bias)
-                        transformer_layer.attention.output.dense.bias.copy_(out_bias)
-
-                        mlp_weight_0 = torch.from_numpy(weights[os.path.join(ROOT, FC_0, "kernel")]).t()
-                        mlp_weight_1 = torch.from_numpy(weights[os.path.join(ROOT, FC_1, "kernel")]).t()
-                        mlp_bias_0 = torch.from_numpy(weights[os.path.join(ROOT, FC_0, "bias")]).t()
-                        mlp_bias_1 = torch.from_numpy(weights[os.path.join(ROOT, FC_1, "bias")]).t()
-
-                        transformer_layer.intermediate.dense.weight.copy_(mlp_weight_0)
-                        transformer_layer.intermediate.dense.bias.copy_(mlp_bias_0)
-                        transformer_layer.output.dense.weight.copy_(mlp_weight_1)
-                        transformer_layer.output.dense.bias.copy_(mlp_bias_1)
-
-                        transformer_layer.layernorm_before.weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_NORM, "scale")]))
-                        transformer_layer.layernorm_before.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_NORM, "bias")]))
-                        transformer_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
-                        transformer_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
+                    transformer_layer.output.dense.weight.copy_(dense_weight)
+                    transformer_layer.output.dense.bias.copy_(dense_bias)
+                    transformer_layer.output.LayerNorm.weight.copy_(layernorm_weight)
+                    transformer_layer.output.LayerNorm.bias.copy_(layernorm_bias)
                     print(f"memory {self.process.memory_info().rss // 1000000} MB")
 
                 elif kernel_id == 1:
 
-                    if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                        query_weight = torch.from_numpy(weights[ROOT + ATTENTION_Q + WEIGHT])
-                        key_weight = torch.from_numpy(weights[ROOT + ATTENTION_K + WEIGHT])
-                        value_weight = torch.from_numpy(weights[ROOT + ATTENTION_V + WEIGHT])
-                        query_bias = torch.from_numpy(weights[ROOT + ATTENTION_Q + BIAS])
-                        key_bias = torch.from_numpy(weights[ROOT + ATTENTION_K + BIAS])
-                        value_bias = torch.from_numpy(weights[ROOT + ATTENTION_V + BIAS])
-                        transformer_layer[0].query.weight.copy_(query_weight)
-                        transformer_layer[0].key.weight.copy_(key_weight)
-                        transformer_layer[0].value.weight.copy_(value_weight)
-                        transformer_layer[0].query.bias.copy_(query_bias)
-                        transformer_layer[0].key.bias.copy_(key_bias)
-                        transformer_layer[0].value.bias.copy_(value_bias)
-                    else:
-                        query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(hidden_size, hidden_size).t()
-                        key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(hidden_size, hidden_size).t()
-                        value_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "kernel")]).view(hidden_size, hidden_size).t()
+                    query_weight = torch.from_numpy(weights[ROOT + ATTENTION_Q + WEIGHT])
+                    key_weight = torch.from_numpy(weights[ROOT + ATTENTION_K + WEIGHT])
+                    value_weight = torch.from_numpy(weights[ROOT + ATTENTION_V + WEIGHT])
+                    query_bias = torch.from_numpy(weights[ROOT + ATTENTION_Q + BIAS])
+                    key_bias = torch.from_numpy(weights[ROOT + ATTENTION_K + BIAS])
+                    value_bias = torch.from_numpy(weights[ROOT + ATTENTION_V + BIAS])
+                    transformer_layer[0].query.weight.copy_(query_weight)
+                    transformer_layer[0].key.weight.copy_(key_weight)
+                    transformer_layer[0].value.weight.copy_(value_weight)
+                    transformer_layer[0].query.bias.copy_(query_bias)
+                    transformer_layer[0].key.bias.copy_(key_bias)
+                    transformer_layer[0].value.bias.copy_(value_bias)
 
-                        query_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "bias")]).view(-1)
-                        key_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "bias")]).view(-1)
-                        value_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "bias")]).view(-1)
-
-                        transformer_layer[0].weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_NORM, "scale")]))
-                        transformer_layer[0].bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_NORM, "bias")]))
-                        transformer_layer[1].query.weight.copy_(query_weight)
-                        transformer_layer[1].key.weight.copy_(key_weight)
-                        transformer_layer[1].value.weight.copy_(value_weight)
-
-                        transformer_layer[1].query.bias.copy_(query_bias)
-                        transformer_layer[1].key.bias.copy_(key_bias)
-                        transformer_layer[1].value.bias.copy_(value_bias)
                 elif kernel_id == 2:
-                    if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                        out_dense_weight = torch.from_numpy(weights[ROOT + ATTENTION_OUT_DENSE + WEIGHT])
-                        output_layernorm_weight = torch.from_numpy(weights[ROOT + ATTENTION_OUT_LAYERNORM + WEIGHT])
-                        out_dense_bias = torch.from_numpy(weights[ROOT + ATTENTION_OUT_DENSE + BIAS])
-                        output_layernorm_bias = torch.from_numpy(weights[ROOT + ATTENTION_OUT_LAYERNORM + BIAS])
-                        transformer_layer[0].dense.weight.copy_(out_dense_weight)
-                        transformer_layer[0].LayerNorm.weight.copy_(output_layernorm_weight)
-                        transformer_layer[0].dense.bias.copy_(out_dense_bias)
-                        transformer_layer[0].LayerNorm.bias.copy_(output_layernorm_bias)
-                    else:
-                        out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(hidden_size, hidden_size).t()
-                        out_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "bias")]).view(-1)
-                        transformer_layer[0].dense.weight.copy_(out_weight)
-                        transformer_layer[0].dense.bias.copy_(out_bias)
+                    out_dense_weight = torch.from_numpy(weights[ROOT + ATTENTION_OUT_DENSE + WEIGHT])
+                    output_layernorm_weight = torch.from_numpy(weights[ROOT + ATTENTION_OUT_LAYERNORM + WEIGHT])
+                    out_dense_bias = torch.from_numpy(weights[ROOT + ATTENTION_OUT_DENSE + BIAS])
+                    output_layernorm_bias = torch.from_numpy(weights[ROOT + ATTENTION_OUT_LAYERNORM + BIAS])
+                    transformer_layer[0].dense.weight.copy_(out_dense_weight)
+                    transformer_layer[0].LayerNorm.weight.copy_(output_layernorm_weight)
+                    transformer_layer[0].dense.bias.copy_(out_dense_bias)
+                    transformer_layer[0].LayerNorm.bias.copy_(output_layernorm_bias)
                 elif kernel_id == 3:
-                    if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                        intermediate_dense_weight = torch.from_numpy(weights[ROOT+INTERMEDIATE+WEIGHT])
-                        intermediate_dense_bias = torch.from_numpy(weights[ROOT+INTERMEDIATE+BIAS])
-                        transformer_layer[0].dense.weight.copy_(intermediate_dense_weight)
-                        transformer_layer[0].dense.bias.copy_(intermediate_dense_bias )
-                    else:
-                        transformer_layer[0].weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
-                        transformer_layer[0].bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
-                        mlp_weight_0 = torch.from_numpy(weights[os.path.join(ROOT, FC_0, "kernel")]).t()
-                        mlp_bias_0 = torch.from_numpy(weights[os.path.join(ROOT, FC_0, "bias")]).t()
-                        transformer_layer[1].dense.weight.copy_(mlp_weight_0)
-                        transformer_layer[1].dense.bias.copy_(mlp_bias_0)
+                    intermediate_dense_weight = torch.from_numpy(weights[ROOT+INTERMEDIATE+WEIGHT])
+                    intermediate_dense_bias = torch.from_numpy(weights[ROOT+INTERMEDIATE+BIAS])
+                    transformer_layer[0].dense.weight.copy_(intermediate_dense_weight)
+                    transformer_layer[0].dense.bias.copy_(intermediate_dense_bias )
                 elif kernel_id == 0:
-                    if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                        dense_weight = torch.from_numpy(weights[ROOT + OUTPUT_DENSE + WEIGHT])
-                        layernorm_weight = torch.from_numpy(weights[ROOT + OUTPUT_LAYER + WEIGHT])
-                        dense_bias = torch.from_numpy(weights[ROOT + OUTPUT_DENSE + BIAS])
-                        layernorm_bias = torch.from_numpy(weights[ROOT + OUTPUT_LAYER + BIAS])
+                    dense_weight = torch.from_numpy(weights[ROOT + OUTPUT_DENSE + WEIGHT])
+                    layernorm_weight = torch.from_numpy(weights[ROOT + OUTPUT_LAYER + WEIGHT])
+                    dense_bias = torch.from_numpy(weights[ROOT + OUTPUT_DENSE + BIAS])
+                    layernorm_bias = torch.from_numpy(weights[ROOT + OUTPUT_LAYER + BIAS])
 
-                        transformer_layer[0].dense.weight.copy_(dense_weight)
-                        transformer_layer[0].dense.bias.copy_(dense_bias)
-                        transformer_layer[0].LayerNorm.weight.copy_(layernorm_weight)
-                        transformer_layer[0].LayerNorm.bias.copy_(layernorm_bias)
-                    else:
-                        mlp_weight_1 = torch.from_numpy(weights[os.path.join(ROOT, FC_1, "kernel")]).t()
-                        mlp_bias_1 = torch.from_numpy(weights[os.path.join(ROOT, FC_1, "bias")]).t()
-                        transformer_layer[0].dense.weight.copy_(mlp_weight_1)
-                        transformer_layer[0].dense.bias.copy_(mlp_bias_1)
+                    transformer_layer[0].dense.weight.copy_(dense_weight)
+                    transformer_layer[0].dense.bias.copy_(dense_bias)
+                    transformer_layer[0].LayerNorm.weight.copy_(layernorm_weight)
+                    transformer_layer[0].LayerNorm.bias.copy_(layernorm_bias)
+
         return transformer_layer
 
     def forward_kernel(self, layer, x, skip, kernel_id):
         if kernel_id == 1:
-            if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                x = layer[0](x)
-            else:
-                x = layer[0](x)
-                x = layer[1](x)[0]
+            x = layer[0](x)
         elif kernel_id == 2:
-            # print(f"======\n x is {x}, skip is {skip}")
-            if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                x = x[0]
+            x = x[0]
             x = layer[0](x, skip)
-            if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                skip=x
-            else:
-                x += skip
-                skip = x
+            skip = x
         elif kernel_id == 3:
-            if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                x = layer[0](x)
-            else:
-                x = layer[0](x)
-                x = layer[1](x)
+            x = layer[0](x)
         else:
             x = layer[0](x, skip)
             skip = x
@@ -429,11 +281,7 @@ class TransformerShard(nn.Module):
                 x, skip = self.forward_kernel(op, x, skip, (i+1)%4)
 
             if self.is_last:
-                if self.model_name == 'bert-base-uncased' or 'bert-large-uncased':
-                    x = self.bertpooler(x)
-                else:
-                    x = self.layernorm(x)
-                    x = self.classifier(x[:, 0, :])
+                x = self.bertpooler(x)
             end = time.time()
             if self.total_batch == 0:
                 self.batch_0_finish = time.time()
@@ -468,7 +316,10 @@ class DistTransformer(nn.Module):
             # Build Transformer Shard
             is_first = i == 0
             is_last = i == world_size-1
-            rref = rpc.remote(f"worker{i}", TransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
+            if model_name == 'bert-base-uncased' or 'bert-large-uncased':
+                rref = rpc.remote(f"worker{i}", BertTransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
+            else:
+                rref = rpc.remote(f"worker{i}", ViTTransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
             self.rref_list.append(rref)
 
     def forward(self, xs):
