@@ -16,60 +16,12 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 from transformers.models.bert.modeling_bert import BertEmbeddings, BertPooler, BertSelfAttention, BertSelfOutput, BertIntermediate, BertOutput, BertLayer
 
 #########################################################
-#                 Check Enviroment Settings             #
-#########################################################
-parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime")
-parser.add_argument("rank", type=int, help="the rank for the current node")
-parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
-parser.add_argument("-m", "--model-name", type=str, default="bert-base-uncased", choices=["google/vit-base-patch16-224",
-"google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k", "bert-base-uncased", "bert-large-uncased"], help="the neural network model for loading")
-parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
-parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
-parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
-parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
-parser.add_argument("-s", "--socket-ifname", type=str, default="lo0", help="socket iframe name, use [ifconfig | ipaddress] to check")
-parser.add_argument("-p","--print", type=str, default = "None", choices=["full", "short", "default"], help="print the [full | short] tensor values")
-parser.add_argument("-t", "--threshold", default=1000, type=int, help="total number of array elements which trigger summarization rather than full repr")
-parser.add_argument("-n", "--num-batches", default=1, type=int, help="total number of batches")
-parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
-parser.add_argument("-w", "--worker-threads", default=128, type=int, help="the number of worker threads for the communication backend")
-parser.add_argument("-sp", "--splits", default="8", help="the list of microbatch size")
-args = parser.parse_args()
-torch.set_printoptions(profile=args.print,threshold=args.threshold)
-## Force pytorch use CPU
-device = torch.device('cpu')
-# parallel_threads = 2
-# torch.set_num_threads(parallel_threads)
-# torch.set_num_interop_threads(parallel_threads)
-torch.set_grad_enabled(False)
-print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
-process = psutil.Process(os.getpid())
-#########################################################
-#                 Configuration for Network             #
-#########################################################
-# *****  Define the World Size and partition Method ******#
-partition =   [int(i) for i in args.partition.split(',')]
-split_size = int(args.splits)
-num_batches = args.num_batches
-batch_size = args.batch_size
-num_worker_threads = args.worker_threads
-operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
-## random data
-# img = torch.randn(3, 384, 384)
-## ground truth: Egyptian cat
-url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
-image = Image.open(requests.get(url, stream=True).raw)
-# image = Image.open('./images/panda.jpeg')
-imgs = [image for i in range(batch_size)]
-
-# ***********************  End  **************************#
-
-#########################################################
 #           Define Model Parallel Transformer           #
 #########################################################
 class TransformerShard(nn.Module):
     def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
         super().__init__()
+        self.operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
         print(f">>>> Model name {model_name}")
@@ -120,7 +72,7 @@ class TransformerShard(nn.Module):
         if self.start_layer %4 != 1 or (self.start_layer+3 > self.end_layer):
             print(f">>>> For the first model part, load weight is {self.load_weight}:")
             for i in range(self.start_layer, min(self.end_layer, math.ceil(self.start_layer/4)*4)+1):
-                print(f"    Load the {i%4}-th operation ({operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
+                print(f"    Load the {i%4}-th operation ({self.operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
                 layer = self._build_kernel(i%4, math.ceil(i/4)-1, self.load_weight)
                 layer.eval()
                 self.first_ops.append(layer)
@@ -144,7 +96,7 @@ class TransformerShard(nn.Module):
         if self.end_layer >= current_layer_idx:
             print(f">>>> For the last model part, load weight is {self.load_weight}:")
         for i in range(current_layer_idx, self.end_layer+1):
-            print(f"    Load the {i%4}-th operation ({operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
+            print(f"    Load the {i%4}-th operation ({self.operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
             layer = self._build_kernel(i%4, math.ceil(i/4)-1, self.load_weight)
             if self.load_weight:
                 layer = self.load_layer_weights(math.ceil(i/4)-1, layer, False, False, True, i%4)
@@ -540,7 +492,7 @@ class DistTransformer(nn.Module):
 #                   Run RPC Processes                   #
 #########################################################
 
-def run_master(model_name, model_file, world_size, split_size,batch_size):
+def run_master(model_name, model_file, world_size, split_size, batch_size):
     print("Run mastering \n")
     latencies = []
     throughputs = []
@@ -597,9 +549,9 @@ def run_master(model_name, model_file, world_size, split_size,batch_size):
     print(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
 
 
-def run_worker(model_name, model_file, rank, world_size, num_split,batch_size):
+def run_worker(model_name, model_file, rank, world_size, num_split, batch_size):
 
-    os.environ['MASTER_ADDR'] = args.addr #MASTER_ADDR #'10.52.3.175' #'127.0.0.1' # '172.30.0.21'
+    os.environ['MASTER_ADDR'] = args.addr #MASTER_ADDR
     os.environ['MASTER_PORT'] = args.port # MASTER_PORT
     os.environ["TP_SOCKET_IFNAME"] = args.socket_ifname #SOCKET_IFNAME
     os.environ["GLOO_SOCKET_IFNAME"] = args.socket_ifname #SOCKET_IFNAME
@@ -615,12 +567,58 @@ def run_worker(model_name, model_file, rank, world_size, num_split,batch_size):
         rpc_backend_options=options
     )
     if rank == 0:
-        run_master(model_name, model_file, world_size, num_split,batch_size)
+        run_master(model_name, model_file, world_size, num_split, batch_size)
 
     # block until all rpcs finisha
     rpc.shutdown()
 
 if __name__=="__main__":
+    #########################################################
+    #                 Check Enviroment Settings             #
+    #########################################################
+    parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime")
+    parser.add_argument("rank", type=int, help="the rank for the current node")
+    parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
+    parser.add_argument("-m", "--model-name", type=str, default="bert-base-uncased", choices=["google/vit-base-patch16-224",
+    "google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k", "bert-base-uncased", "bert-large-uncased"], help="the neural network model for loading")
+    parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
+    parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
+    parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
+    parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
+    parser.add_argument("-s", "--socket-ifname", type=str, default="lo0", help="socket iframe name, use [ifconfig | ipaddress] to check")
+    parser.add_argument("-p","--print", type=str, default = "None", choices=["full", "short", "default"], help="print the [full | short] tensor values")
+    parser.add_argument("-t", "--threshold", default=1000, type=int, help="total number of array elements which trigger summarization rather than full repr")
+    parser.add_argument("-n", "--num-batches", default=1, type=int, help="total number of batches")
+    parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
+    parser.add_argument("-w", "--worker-threads", default=128, type=int, help="the number of worker threads for the communication backend")
+    parser.add_argument("-sp", "--splits", default="8", help="the list of microbatch size")
+    args = parser.parse_args()
+    torch.set_printoptions(profile=args.print,threshold=args.threshold)
+    ## Force pytorch use CPU
+    device = torch.device('cpu')
+    # parallel_threads = 2
+    # torch.set_num_threads(parallel_threads)
+    # torch.set_num_interop_threads(parallel_threads)
+    torch.set_grad_enabled(False)
+    print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
+    process = psutil.Process(os.getpid())
+    #########################################################
+    #                 Configuration for Network             #
+    #########################################################
+    # *****  Define the World Size and partition Method ******#
+    partition =   [int(i) for i in args.partition.split(',')]
+    num_batches = args.num_batches
+    batch_size = args.batch_size
+    num_worker_threads = args.worker_threads
+    ## random data
+    # img = torch.randn(3, 384, 384)
+    ## ground truth: Egyptian cat
+    url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
+    image = Image.open(requests.get(url, stream=True).raw)
+    # image = Image.open('./images/panda.jpeg')
+    imgs = [image for i in range(batch_size)]
+
+    # ***********************  End  **************************#
     world_size = args.worldsize
     rank=args.rank
     num_split = [int(i) for i in args.splits.split(',')]
@@ -640,6 +638,6 @@ if __name__=="__main__":
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
 
     tik = time.time()
-    run_worker(model_name, model_file, rank, world_size, num_split,batch_size)
+    run_worker(model_name, model_file, rank, world_size, num_split, batch_size)
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")

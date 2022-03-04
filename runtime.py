@@ -3,7 +3,6 @@ import gc
 import logging
 import os
 import time
-# import cProfile
 from PIL import Image
 import psutil
 import requests
@@ -54,7 +53,7 @@ class DistTransformer(nn.Module):
 #                   Run RPC Processes                   #
 #########################################################
 
-def run_master(model_name, model_file, world_size, split_size):
+def run_master(model_name, model_file, world_size, split_size, batch_size):
     print("Run mastering \n")
     latencies = []
     throughputs = []
@@ -95,7 +94,7 @@ def run_master(model_name, model_file, world_size, split_size):
     logging.info(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
 
 
-def run_worker(model_name, model_file, rank, world_size, num_split):
+def run_worker(model_name, model_file, rank, world_size, num_split, batch_size):
 
     os.environ['MASTER_ADDR'] = args.addr #MASTER_ADDR
     os.environ['MASTER_PORT'] = args.port # MASTER_PORT
@@ -113,7 +112,7 @@ def run_worker(model_name, model_file, rank, world_size, num_split):
         rpc_backend_options=options
     )
     if rank == 0:
-        run_master(model_name, model_file, world_size, num_split)
+        run_master(model_name, model_file, world_size, num_split, batch_size)
 
     # block until all rpcs finisha
     rpc.shutdown()
@@ -183,7 +182,6 @@ if __name__=="__main__":
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
 
     tik = time.time()
-    # cProfile.run("run_worker(model_name, model_file, rank, world_size, num_split)")
-    run_worker(model_name, model_file, rank, world_size, num_split)
+    run_worker(model_name, model_file, rank, world_size, num_split, batch_size)
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")
