@@ -22,6 +22,7 @@ class TransformerShard(nn.Module):
     def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
         super().__init__()
         self.operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
+        self.process = psutil.Process(os.getpid())
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
         print(f">>>> Model name {model_name}")
@@ -289,7 +290,7 @@ class TransformerShard(nn.Module):
                         transformer_layer.layernorm_before.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_NORM, "bias")]))
                         transformer_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
                         transformer_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
-                    print(f"memory {process.memory_info().rss // 1000000} MB")
+                    print(f"memory {self.process.memory_info().rss // 1000000} MB")
 
                 elif kernel_id == 1:
 
@@ -444,7 +445,7 @@ class TransformerShard(nn.Module):
 
         self.total_time +=  (end - start)
         self.total_batch += 1
-        print(f"Round {self.total_batch}: memory {process.memory_info().rss // 1000000} MB")
+        print(f"Round {self.total_batch}: memory {self.process.memory_info().rss // 1000000} MB")
         print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         if self.is_last:
             return x
@@ -601,7 +602,6 @@ if __name__=="__main__":
     # torch.set_num_interop_threads(parallel_threads)
     torch.set_grad_enabled(False)
     print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
-    process = psutil.Process(os.getpid())
     #########################################################
     #                 Configuration for Network             #
     #########################################################

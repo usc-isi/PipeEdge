@@ -4,7 +4,6 @@ import logging
 import os
 import time
 from PIL import Image
-import psutil
 import requests
 import torch
 from torch import nn
@@ -147,7 +146,6 @@ if __name__=="__main__":
     torch.set_grad_enabled(False)
     print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
     logging.info(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
-    process = psutil.Process(os.getpid())
     #########################################################
     #                 Configuration for Network             #
     #########################################################
