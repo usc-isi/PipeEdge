@@ -10,7 +10,7 @@ from torch import nn
 from torch.distributed import rpc
 from torch.distributed.rpc import RRef
 from transformers import ViTFeatureExtractor
-from transformer import TransformerShard
+from transformer import ViTTransformerShard
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log',level=logging.INFO)
@@ -28,7 +28,7 @@ class DistTransformer(nn.Module):
             # Build Transformer Shard
             is_first = i == 0
             is_last = i == world_size-1
-            rref = rpc.remote(f"worker{i}", TransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
+            rref = rpc.remote(f"worker{i}", ViTTransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
             self.rref_list.append(rref)
 
     def forward(self, xs):

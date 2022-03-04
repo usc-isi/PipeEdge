@@ -14,7 +14,7 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 #########################################################
 #           Define Model Parallel Transformer           #
 #########################################################
-class TransformerShard(nn.Module):
+class ViTTransformerShard(nn.Module):
     def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
         super().__init__()
         self.operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
@@ -48,8 +48,8 @@ class TransformerShard(nn.Module):
             print(f">>>> Load weight file {self.weights_file_name}")
             logging.info(f">>>> Load weight file f{self.weights_file_name}")
         self._make_layer()
-        print(f"======= Finish Build TransformerShard{self.rank} ==========")
-        logging.info(f"======= Finish Build TransformerShard{self.rank} ==========")
+        print(f"======= Finish Build ViTTransformerShard{self.rank} ==========")
+        logging.info(f"======= Finish Build ViTTransformerShard{self.rank} ==========")
 
     def _make_layer(self):
         ## first Shard
