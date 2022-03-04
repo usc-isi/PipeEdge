@@ -20,11 +20,12 @@ class DistTransformer(nn.Module):
         self.world_size = world_size
         self.num_split = num_split
         self.rref_list = []
+        self.model_name = model_name
         for i in range(world_size):
             # Build Transformer Shard
             is_first = i == 0
             is_last = i == world_size-1
-            if model_name == 'bert-base-uncased' or 'bert-large-uncased':
+            if model_name in ['bert-base-uncased', 'bert-large-uncased']:
                 rref = rpc.remote(f"worker{i}", BertTransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
             else:
                 rref = rpc.remote(f"worker{i}", ViTTransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
@@ -33,8 +34,9 @@ class DistTransformer(nn.Module):
     def forward(self, xs):
         out_futures = []
         for x in iter(xs.split(self.num_split, dim=0)):
-            # skip = torch.zeros(x.size())
-            # x = torch.stack((x, skip), 0)
+            if self.model_name not in ['bert-base-uncased', 'bert-large-uncased']:
+                skip = torch.zeros(x.size())
+                x = torch.stack((x, skip), 0)
             x_rref = RRef(x)
             for i in range(self.world_size-1):
                 x_rref = self.rref_list[i].remote().__call__(x_rref)
@@ -62,7 +64,7 @@ def run_master(model_name, model_file, world_size, split_size, batch_size):
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
         model =  DistTransformer(model_name, model_file, world_size, split_size[si])
-        if model_name == 'bert-base-uncased' or 'bert-large-uncased':
+        if model_name in ['bert-base-uncased', 'bert-large-uncased']:
             tokenizer = BertTokenizer.from_pretrained(model_name)
             inputs_sentence = list(bert_inputs[0: batch_size])
             print(len(inputs_sentence))
@@ -82,12 +84,12 @@ def run_master(model_name, model_file, world_size, split_size, batch_size):
 
         tik = time.time()
         for i in range(num_batches):
-        #     # generate random inputs and labels
-            if model_name == 'bert-base-uncased' or 'bert-large-uncased':
+            # generate random inputs and labels
+            if model_name in ['bert-base-uncased', 'bert-large-uncased']:
                 outputs = model(inputs)
-        #     else:
-        #         outputs = model(inputs['pixel_values'])
-        #     # print(f"outputs is {outputs}")
+            else:
+                outputs = model(inputs['pixel_values'])
+            print(f"outputs is {outputs}")
             # predicted_class_idx = outputs[0].argmax(-1).item()
             # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
         ## Calculate time
