@@ -15,14 +15,14 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 #           Define Model Parallel Transformer           #
 #########################################################
 class TransformerShard(nn.Module):
-    def __init__(self, rank, model_name, is_first, is_last, start_layer, end_layer, load_weight=True):
-        super(TransformerShard, self).__init__()
-        logging.basicConfig(filename='runtime.log',level=logging.INFO)
+    def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
+        super().__init__()
         self.operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
         self.process = psutil.Process(os.getpid())
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
         print(f">>>> Model name {model_name}")
+        self.weights_file_name = model_file
         self.rank = rank
         self.is_first = is_first
         self.is_last = is_last
@@ -44,13 +44,6 @@ class TransformerShard(nn.Module):
         self.vit_layers = nn.ModuleList()
         self.last_ops = nn.ModuleList()
 
-        ## weight file anme
-        if self.model_name == 'google/vit-base-patch16-224':
-            self.weights_file_name = 'ViT-B_16-224.npz'
-        elif self.model_name == 'google/vit-large-patch16-224':
-            self.weights_file_name = 'ViT-L_16-224.npz'
-        elif self.model_name == 'google/vit-huge-patch14-224-in21k':
-            self.weights_file_name = 'ViT-H_14.npz'
         if self.load_weight:
             print(f">>>> Load weight file {self.weights_file_name}")
             logging.info(f">>>> Load weight file f{self.weights_file_name}")
@@ -143,7 +136,7 @@ class TransformerShard(nn.Module):
         FC_1 = "MlpBlock_3/Dense_1"
         ATTENTION_NORM = "LayerNorm_0"
         MLP_NORM = "LayerNorm_2"
-        self.hidden_size = self.config.hidden_size
+        hidden_size = self.config.hidden_size
         if load_first:
             with torch.no_grad():
                 self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["Transformer/posembed_input/pos_embedding"])))
@@ -167,15 +160,15 @@ class TransformerShard(nn.Module):
                 # print(f">>>> Load Layernorm, classifier for the last shard")
 
 
-        if load_first == False and load_last == False:
+        if not load_first and not load_last:
             with torch.no_grad():
-                if load_kernel == False:
+                if not load_kernel:
 
-                    query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
+                    query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(hidden_size, hidden_size).t()
                     print("query weight shape is ", query_weight.shape)
-                    key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-                    value_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-                    out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(self.hidden_size, self.hidden_size).t()
+                    key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(hidden_size, hidden_size).t()
+                    value_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "kernel")]).view(hidden_size, hidden_size).t()
+                    out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(hidden_size, hidden_size).t()
 
                     query_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "bias")]).view(-1)
                     key_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "bias")]).view(-1)
@@ -211,9 +204,9 @@ class TransformerShard(nn.Module):
 
                 elif kernel_id == 1:
 
-                    query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-                    key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(self.hidden_size, self.hidden_size).t()
-                    value_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "kernel")]).view(self.hidden_size, self.hidden_size).t()
+                    query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(hidden_size, hidden_size).t()
+                    key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(hidden_size, hidden_size).t()
+                    value_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "kernel")]).view(hidden_size, hidden_size).t()
 
                     query_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "bias")]).view(-1)
                     key_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "bias")]).view(-1)
@@ -230,7 +223,7 @@ class TransformerShard(nn.Module):
                     transformer_layer[1].value.bias.copy_(value_bias)
 
                 elif kernel_id == 2:
-                    out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(self.hidden_size, self.hidden_size).t()
+                    out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(hidden_size, hidden_size).t()
                     out_bias = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "bias")]).view(-1)
                     transformer_layer[0].dense.weight.copy_(out_weight)
                     transformer_layer[0].dense.bias.copy_(out_bias)

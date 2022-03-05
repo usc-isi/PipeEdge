@@ -3,9 +3,7 @@ import gc
 import logging
 import os
 import time
-# import cProfile
 from PIL import Image
-import psutil
 import requests
 import torch
 from torch import nn
@@ -21,8 +19,8 @@ logging.basicConfig(filename='runtime.log',level=logging.INFO)
 #             Stitch Shards into one Module             #
 #########################################################
 class DistTransformer(nn.Module):
-    def __init__(self, model_name, world_size, num_split):
-        super(DistTransformer, self).__init__()
+    def __init__(self, model_name, model_file, world_size, num_split):
+        super().__init__()
         self.world_size = world_size
         self.num_split = num_split
         self.rref_list = []
@@ -30,7 +28,7 @@ class DistTransformer(nn.Module):
             # Build Transformer Shard
             is_first = i == 0
             is_last = i == world_size-1
-            rref = rpc.remote(f"worker{i}", TransformerShard, args=(i, model_name, is_first, is_last, partition[2*i], partition[2*i+1], True))
+            rref = rpc.remote(f"worker{i}", TransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
             self.rref_list.append(rref)
 
     def forward(self, xs):
@@ -54,7 +52,7 @@ class DistTransformer(nn.Module):
 #                   Run RPC Processes                   #
 #########################################################
 
-def run_master(model_name, world_size, split_size):
+def run_master(model_name, model_file, world_size, split_size, batch_size):
     print("Run mastering \n")
     latencies = []
     throughputs = []
@@ -63,7 +61,7 @@ def run_master(model_name, world_size, split_size):
     # origin_model = ViTForImageClassification.from_pretrained(model_name)
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
-        model =  DistTransformer(model_name, world_size, split_size[si])
+        model =  DistTransformer(model_name, model_file, world_size, split_size[si])
         inputs = feature_extractor(images=imgs, return_tensors="pt")
         tik = time.time()
         for i in range(num_batches):
@@ -95,7 +93,7 @@ def run_master(model_name, world_size, split_size):
     logging.info(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
 
 
-def run_worker(model_name, rank, world_size, num_split):
+def run_worker(model_name, model_file, rank, world_size, num_split, batch_size):
 
     os.environ['MASTER_ADDR'] = args.addr #MASTER_ADDR
     os.environ['MASTER_PORT'] = args.port # MASTER_PORT
@@ -113,7 +111,7 @@ def run_worker(model_name, rank, world_size, num_split):
         rpc_backend_options=options
     )
     if rank == 0:
-        run_master(model_name, world_size, num_split)
+        run_master(model_name, model_file, world_size, num_split, batch_size)
 
     # block until all rpcs finisha
     rpc.shutdown()
@@ -127,6 +125,7 @@ if __name__=="__main__":
     parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
     parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224", choices=["google/vit-base-patch16-224",
     "google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k"], help="the neural network model for loading")
+    parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
     parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
     parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
     parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
@@ -147,7 +146,6 @@ if __name__=="__main__":
     torch.set_grad_enabled(False)
     print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
     logging.info(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
-    process = psutil.Process(os.getpid())
     #########################################################
     #                 Configuration for Network             #
     #########################################################
@@ -170,10 +168,18 @@ if __name__=="__main__":
     num_split = [int(i) for i in args.splits.split(',')]
     model_name= args.model_name
 
+    model_files_default = {
+        'google/vit-base-patch16-224': 'ViT-B_16-224.npz',
+        'google/vit-large-patch16-224':'ViT-L_16-224.npz',
+        'google/vit-huge-patch14-224-in21k': 'ViT-H_14.npz',
+    }
+    model_file = args.model_file
+    if model_file is None:
+        model_file = model_files_default[model_name]
+
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
 
     tik = time.time()
-    # cProfile.run("run_worker(model_name, rank, world_size, num_split)")
-    run_worker(model_name, rank, world_size, num_split)
+    run_worker(model_name, model_file, rank, world_size, num_split, batch_size)
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")
