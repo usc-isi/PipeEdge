@@ -3,12 +3,13 @@ import gc
 import logging
 import os
 import time
+import numpy as np
 from PIL import Image
 import requests
 import torch
 from torch.distributed import rpc
-from transformers import ViTFeatureExtractor
-from transformer import ViTDistTransformer
+from transformers import BertTokenizer, ViTFeatureExtractor
+from transformer import BertDistTransformer, ViTDistTransformer
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log',level=logging.INFO)
@@ -86,8 +87,13 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime")
     parser.add_argument("rank", type=int, help="the rank for the current node")
     parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
-    parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224", choices=["google/vit-base-patch16-224",
-    "google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k"], help="the neural network model for loading")
+    parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224",
+                        choices=["google/vit-base-patch16-224",
+                                 "google/vit-large-patch16-224",
+                                 "google/vit-huge-patch14-224-in21k",
+                                 "bert-base-uncased",
+                                 "bert-large-uncased"],
+                        help="the neural network model for loading")
     parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
     parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
     parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
@@ -135,6 +141,8 @@ if __name__=="__main__":
         'google/vit-base-patch16-224': 'ViT-B_16-224.npz',
         'google/vit-large-patch16-224':'ViT-L_16-224.npz',
         'google/vit-huge-patch14-224-in21k': 'ViT-H_14.npz',
+        'bert-base-uncased': 'BERT-B.npz',
+        'bert-large-uncased': 'BERT-L.npz',
     }
     model_file = args.model_file
     if model_file is None:
@@ -143,10 +151,19 @@ if __name__=="__main__":
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
 
     tik = time.time()
-    DistTransformerClass = ViTDistTransformer
+    if model_name in ['bert-base-uncased', 'bert-large-uncased']:
+        DistTransformerClass = BertDistTransformer
+        bert_inputs = np.load("bert_input.npz")['input']
+        inputs_sentence = list(bert_inputs[0: batch_size])
+        # print(len(inputs_sentence))
+        tokenizer = BertTokenizer.from_pretrained(model_name)
+        inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
+    else:
+        DistTransformerClass = ViTDistTransformer
+        feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
+        inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
+    # init args happen to be the same for each dist class
     xformer_args_split = [(model_name, model_file, world_size, partition, ns) for ns in num_split]
-    feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
-    inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
     run_worker(rank, world_size, num_split, batch_size)
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")
