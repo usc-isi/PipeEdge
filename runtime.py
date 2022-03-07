@@ -18,21 +18,18 @@ logging.basicConfig(filename='runtime.log',level=logging.INFO)
 #                   Run RPC Processes                   #
 #########################################################
 
-def run_master(model_name, model_file, world_size, split_size, batch_size):
+def run_master(split_size, batch_size):
     print("Run mastering \n")
     latencies = []
     throughputs = []
-    feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
     ## for verification
     # origin_model = ViTForImageClassification.from_pretrained(model_name)
-    for si in range(len(split_size)):
-        # print(f"Start Calcluate split size {split_size[si]}")
-        model =  ViTDistTransformer(model_name, model_file, world_size, partition, split_size[si])
-        inputs = feature_extractor(images=imgs, return_tensors="pt")
+    for ss, xformer_args in zip(split_size, xformer_args_split):
+        # print(f"Start Calcluate split size {ss}")
+        model = DistTransformerClass(*xformer_args)
         tik = time.time()
         for i in range(num_batches):
-            # generate random inputs and labels
-            outputs = model(inputs['pixel_values'])
+            outputs = model(inputs)
             print(f"outputs is {outputs}")
             logging.info(f"outputs is {outputs}")
             del outputs
@@ -59,7 +56,7 @@ def run_master(model_name, model_file, world_size, split_size, batch_size):
     logging.info(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
 
 
-def run_worker(model_name, model_file, rank, world_size, num_split, batch_size):
+def run_worker(rank, world_size, num_split, batch_size):
 
     os.environ['MASTER_ADDR'] = args.addr #MASTER_ADDR
     os.environ['MASTER_PORT'] = args.port # MASTER_PORT
@@ -77,7 +74,7 @@ def run_worker(model_name, model_file, rank, world_size, num_split, batch_size):
         rpc_backend_options=options
     )
     if rank == 0:
-        run_master(model_name, model_file, world_size, num_split, batch_size)
+        run_master(num_split, batch_size)
 
     # block until all rpcs finisha
     rpc.shutdown()
@@ -146,6 +143,10 @@ if __name__=="__main__":
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
 
     tik = time.time()
-    run_worker(model_name, model_file, rank, world_size, num_split, batch_size)
+    DistTransformerClass = ViTDistTransformer
+    xformer_args_split = [(model_name, model_file, world_size, partition, ns) for ns in num_split]
+    feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
+    inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
+    run_worker(rank, world_size, num_split, batch_size)
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")

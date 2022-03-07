@@ -14,42 +14,18 @@ from transformer import BertDistTransformer, ViTDistTransformer
 #                   Run RPC Processes                   #
 #########################################################
 
-def run_master(model_name, model_file, world_size, split_size, batch_size):
+def run_master(split_size, batch_size):
     print("Run mastering \n")
     latencies = []
     throughputs = []
-    bert_inputs = np.load("bert_input.npz")['input']
     ## for verification
     # origin_model = ViTForImageClassification.from_pretrained(model_name)
-    for si in range(len(split_size)):
-        # print(f"Start Calcluate split size {split_size[si]}")
-        if model_name in ['bert-base-uncased', 'bert-large-uncased']:
-            model = BertDistTransformer(model_name, model_file, world_size, partition, split_size[si])
-            tokenizer = BertTokenizer.from_pretrained(model_name)
-            inputs_sentence = list(bert_inputs[0: batch_size])
-            print(len(inputs_sentence))
-            inputs = tokenizer(inputs_sentence, padding=True,truncation=True,
-                  return_tensors="pt")
-            # print(inputs)
-            # inputs_list = []
-            # inputs_list.append(inputs['input_ids'])
-            # inputs_list.append(inputs['token_type_ids'])
-            # inputs = []
-            # inputs.append(inputs_list)
-            # print(f"inputs_list is {inputs_list}, inputs is {inputs}")
-            inputs = inputs['input_ids']
-        else:
-            model = ViTDistTransformer(model_name, model_file, world_size, partition, split_size[si])
-            feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
-            inputs = feature_extractor(images=imgs, return_tensors="pt")
-
+    for ss, xformer_args in zip(split_size, xformer_args_split):
+        # print(f"Start Calcluate split size {ss}")
+        model = DistTransformerClass(*xformer_args)
         tik = time.time()
         for i in range(num_batches):
-            # generate random inputs and labels
-            if model_name in ['bert-base-uncased', 'bert-large-uncased']:
-                outputs = model(inputs)
-            else:
-                outputs = model(inputs['pixel_values'])
+            outputs = model(inputs)
             print(f"outputs is {outputs}")
             # predicted_class_idx = outputs[0].argmax(-1).item()
             # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
@@ -57,7 +33,6 @@ def run_master(model_name, model_file, world_size, split_size, batch_size):
         tok = time.time()
         latency = tok-tik
         throughput = num_batches*batch_size / latency
-        # print(f"Split size is {split_size[si]}, Total program execution time = {tok - tik}")
         latencies.append(latency)
         throughputs.append(throughput)
 
@@ -72,7 +47,7 @@ def run_master(model_name, model_file, world_size, split_size, batch_size):
     print(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
 
 
-def run_worker(model_name, model_file, rank, world_size, num_split, batch_size):
+def run_worker(rank, world_size, num_split, batch_size):
 
     os.environ['MASTER_ADDR'] = args.addr #MASTER_ADDR
     os.environ['MASTER_PORT'] = args.port # MASTER_PORT
@@ -90,7 +65,7 @@ def run_worker(model_name, model_file, rank, world_size, num_split, batch_size):
         rpc_backend_options=options
     )
     if rank == 0:
-        run_master(model_name, model_file, world_size, num_split, batch_size)
+        run_master(num_split, batch_size)
 
     # block until all rpcs finisha
     rpc.shutdown()
@@ -160,6 +135,19 @@ if __name__=="__main__":
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
 
     tik = time.time()
-    run_worker(model_name, model_file, rank, world_size, num_split, batch_size)
+    if model_name in ['bert-base-uncased', 'bert-large-uncased']:
+        DistTransformerClass = BertDistTransformer
+        bert_inputs = np.load("bert_input.npz")['input']
+        inputs_sentence = list(bert_inputs[0: batch_size])
+        # print(len(inputs_sentence))
+        tokenizer = BertTokenizer.from_pretrained(model_name)
+        inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
+    else:
+        DistTransformerClass = ViTDistTransformer
+        feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
+        inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
+    # init args happen to be the same for each dist class
+    xformer_args_split = [(model_name, model_file, world_size, partition, ns) for ns in num_split]
+    run_worker(rank, world_size, num_split, batch_size)
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")
