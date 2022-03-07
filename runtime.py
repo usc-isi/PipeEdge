@@ -1,3 +1,4 @@
+"""Distributed pipeline driver application."""
 import argparse
 import gc
 import logging
@@ -18,18 +19,47 @@ logging.basicConfig(filename='runtime.log',level=logging.INFO)
 #########################################################
 #                   Run RPC Processes                   #
 #########################################################
+class DistributedPipeline():
+    """The singleton distributed pipeline context manager."""
 
-def run_master(split_size, batch_size):
-    print("Run mastering \n")
-    latencies = []
-    throughputs = []
-    ## for verification
-    # origin_model = ViTForImageClassification.from_pretrained(model_name)
-    for ss, xformer_args in zip(split_size, xformer_args_split):
-        # print(f"Start Calcluate split size {ss}")
-        model = DistTransformerClass(*xformer_args)
-        tik = time.time()
-        for i in range(num_batches):
+    def __init__(self, world_size, rank, num_rpc_worker_threads):
+        self.world_size = world_size
+        self.rank = rank
+        self.num_rpc_worker_threads = num_rpc_worker_threads
+        self._initialized = False
+
+    def init(self):
+        """Initialize the distributed context."""
+        assert not self._initialized
+        # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
+        options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=self.num_rpc_worker_threads,
+                                                  rpc_timeout=3000)
+        rpc.init_rpc(f"worker{self.rank}",
+                     rank=self.rank,
+                     # backend=rpc.BackendType.PROCESS_GROUP,
+                     world_size=self.world_size,
+                     rpc_backend_options=options)
+        self._initialized = True
+
+    def shutdown(self):
+        """Wait for all RPCs to finish and shutdown the distributed context."""
+        assert self._initialized
+        self._initialized = False
+        rpc.shutdown()
+
+    def __enter__(self):
+        self.init()
+        return self
+
+    def __exit__(self, *args):
+        self.shutdown()
+
+    def forward_model(self, model, inputs, num_batches=1):
+        """Drive the distributed pipeline model with input data."""
+        assert self._initialized
+        ## for verification
+        # origin_model = ViTForImageClassification.from_pretrained(model_name)
+        for _ in range(num_batches):
             outputs = model(inputs)
             print(f"outputs is {outputs}")
             logging.info(f"outputs is {outputs}")
@@ -37,48 +67,7 @@ def run_master(split_size, batch_size):
             gc.collect()
             # predicted_class_idx = outputs[0].argmax(-1).item()
             # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
-        ## Calculate time
-        tok = time.time()
-        latency = tok-tik
-        throughput = num_batches*batch_size / latency
-        latencies.append(latency)
-        throughputs.append(throughput)
 
-    best_choice = -1
-    best_throughput  = -1
-    for i in range(len(split_size)):
-        print(f"Split size {split_size[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
-        logging.info(f"Split size {split_size[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
-        if throughputs[i] > best_throughput:
-            best_throughput = throughputs[i]
-            best_choice = i
-    print("\n---------------- Split output line ----------------")
-    print(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
-    logging.info(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
-
-
-def run_worker(rank, world_size, num_split, batch_size):
-
-    os.environ['MASTER_ADDR'] = args.addr #MASTER_ADDR
-    os.environ['MASTER_PORT'] = args.port # MASTER_PORT
-    os.environ["TP_SOCKET_IFNAME"] = args.socket_ifname #SOCKET_IFNAME
-    os.environ["GLOO_SOCKET_IFNAME"] = args.socket_ifname #SOCKET_IFNAME
-
-    # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
-    options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=num_worker_threads,rpc_timeout=3000)
-
-    rpc.init_rpc(
-        f"worker{rank}",
-        rank=rank,
-#         backend=rpc.BackendType.PROCESS_GROUP,
-        world_size=world_size,
-        rpc_backend_options=options
-    )
-    if rank == 0:
-        run_master(num_split, batch_size)
-
-    # block until all rpcs finisha
-    rpc.shutdown()
 
 if __name__=="__main__":
     #########################################################
@@ -150,6 +139,11 @@ if __name__=="__main__":
 
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
 
+    os.environ['MASTER_ADDR'] = args.addr # MASTER_ADDR
+    os.environ['MASTER_PORT'] = args.port # MASTER_PORT
+    os.environ["TP_SOCKET_IFNAME"] = args.socket_ifname # SOCKET_IFNAME
+    os.environ["GLOO_SOCKET_IFNAME"] = args.socket_ifname # SOCKET_IFNAME
+
     tik = time.time()
     if model_name in ['bert-base-uncased', 'bert-large-uncased']:
         DistTransformerClass = BertDistTransformer
@@ -163,7 +157,34 @@ if __name__=="__main__":
         feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
         inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
     # init args happen to be the same for each dist class
-    xformer_args_split = [(model_name, model_file, world_size, partition, ns) for ns in num_split]
-    run_worker(rank, world_size, num_split, batch_size)
+    xformer_args_split = [(model_name, model_file, world_size, partition, ss) for ss in num_split]
+
+    with DistributedPipeline(world_size, rank, num_worker_threads) as pipeline:
+        if rank == 0:
+            print("Run mastering \n")
+            latencies = []
+            throughputs = []
+            for ss, xformer_args in zip(num_split, xformer_args_split):
+                # print(f"Start calculate split size {ss}")
+                model = DistTransformerClass(*xformer_args)
+                tik_ss = time.time()
+                pipeline.forward_model(model, inputs, num_batches)
+                tok_ss = time.time()
+                latency = tok_ss - tik_ss
+                throughput = num_batches * batch_size / latency
+                latencies.append(latency)
+                throughputs.append(throughput)
+            best_choice = -1
+            best_throughput  = -1
+            for i, _ in enumerate(num_split):
+                print(f"Split size {num_split[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
+                logging.info(f"Split size {num_split[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
+                if throughputs[i] > best_throughput:
+                    best_throughput = throughputs[i]
+                    best_choice = i
+            print("\n---------------- Split output line ----------------")
+            print(f"\nBest split size is {num_split[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
+            logging.info(f"\nBest split size is {num_split[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
+
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")
