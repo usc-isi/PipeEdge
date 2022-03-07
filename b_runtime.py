@@ -5,49 +5,9 @@ import numpy as np
 from PIL import Image
 import requests
 import torch
-from torch import nn
 from torch.distributed import rpc
-from torch.distributed.rpc import RRef
 from transformers import BertTokenizer, ViTFeatureExtractor
-from transformer import BertTransformerShard, ViTTransformerShard
-
-#########################################################
-#             Stitch Shards into one Module             #
-#########################################################
-class DistTransformer(nn.Module):
-    def __init__(self, model_name, model_file, world_size, num_split):
-        super().__init__()
-        self.world_size = world_size
-        self.num_split = num_split
-        self.rref_list = []
-        self.model_name = model_name
-        for i in range(world_size):
-            # Build Transformer Shard
-            is_first = i == 0
-            is_last = i == world_size-1
-            if model_name in ['bert-base-uncased', 'bert-large-uncased']:
-                rref = rpc.remote(f"worker{i}", BertTransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
-            else:
-                rref = rpc.remote(f"worker{i}", ViTTransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
-            self.rref_list.append(rref)
-
-    def forward(self, xs):
-        out_futures = []
-        for x in iter(xs.split(self.num_split, dim=0)):
-            if self.model_name not in ['bert-base-uncased', 'bert-large-uncased']:
-                skip = torch.zeros(x.size())
-                x = torch.stack((x, skip), 0)
-            x_rref = RRef(x)
-            for i in range(self.world_size-1):
-                x_rref = self.rref_list[i].remote().__call__(x_rref)
-            y_rref = self.rref_list[self.world_size-1].rpc_async().__call__(x_rref)
-            out_futures.append(y_rref)
-        # res = torch.cat(torch.futures.wait_all(out_futures))
-        # res = x_rref.to_here()
-        # del out_futures
-        # gc.collect()
-        # return torch.cat(torch.futures.wait_all(out_futures))
-        return torch.cat(torch.futures.wait_all(out_futures))
+from transformer import BertDistTransformer, ViTDistTransformer
 
 
 #########################################################
@@ -63,8 +23,8 @@ def run_master(model_name, model_file, world_size, split_size, batch_size):
     # origin_model = ViTForImageClassification.from_pretrained(model_name)
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
-        model =  DistTransformer(model_name, model_file, world_size, split_size[si])
         if model_name in ['bert-base-uncased', 'bert-large-uncased']:
+            model = BertDistTransformer(model_name, model_file, world_size, partition, split_size[si])
             tokenizer = BertTokenizer.from_pretrained(model_name)
             inputs_sentence = list(bert_inputs[0: batch_size])
             print(len(inputs_sentence))
@@ -79,6 +39,7 @@ def run_master(model_name, model_file, world_size, split_size, batch_size):
             # print(f"inputs_list is {inputs_list}, inputs is {inputs}")
             inputs = inputs['input_ids']
         else:
+            model = ViTDistTransformer(model_name, model_file, world_size, partition, split_size[si])
             feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
             inputs = feature_extractor(images=imgs, return_tensors="pt")
 

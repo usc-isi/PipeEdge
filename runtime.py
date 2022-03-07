@@ -6,47 +6,13 @@ import time
 from PIL import Image
 import requests
 import torch
-from torch import nn
 from torch.distributed import rpc
-from torch.distributed.rpc import RRef
 from transformers import ViTFeatureExtractor
-from transformer import ViTTransformerShard
+from transformer import ViTDistTransformer
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log',level=logging.INFO)
 
-#########################################################
-#             Stitch Shards into one Module             #
-#########################################################
-class DistTransformer(nn.Module):
-    def __init__(self, model_name, model_file, world_size, num_split):
-        super().__init__()
-        self.world_size = world_size
-        self.num_split = num_split
-        self.rref_list = []
-        for i in range(world_size):
-            # Build Transformer Shard
-            is_first = i == 0
-            is_last = i == world_size-1
-            rref = rpc.remote(f"worker{i}", ViTTransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
-            self.rref_list.append(rref)
-
-    def forward(self, xs):
-        out_futures = []
-        for x in iter(xs.split(self.num_split, dim=0)):
-            skip = torch.zeros(x.size())
-            x = torch.stack((x, skip), 0)
-            x_rref = RRef(x)
-            for i in range(self.world_size-1):
-                x_rref = self.rref_list[i].remote().__call__(x_rref)
-            y_rref = self.rref_list[self.world_size-1].rpc_async().__call__(x_rref)
-            out_futures.append(y_rref)
-        # res = torch.cat(torch.futures.wait_all(out_futures))
-        # res = x_rref.to_here()
-        # del out_futures
-        # gc.collect()
-        # return torch.cat(torch.futures.wait_all(out_futures))
-        return torch.cat(torch.futures.wait_all(out_futures))
 
 #########################################################
 #                   Run RPC Processes                   #
@@ -61,7 +27,7 @@ def run_master(model_name, model_file, world_size, split_size, batch_size):
     # origin_model = ViTForImageClassification.from_pretrained(model_name)
     for si in range(len(split_size)):
         # print(f"Start Calcluate split size {split_size[si]}")
-        model =  DistTransformer(model_name, model_file, world_size, split_size[si])
+        model =  ViTDistTransformer(model_name, model_file, world_size, partition, split_size[si])
         inputs = feature_extractor(images=imgs, return_tensors="pt")
         tik = time.time()
         for i in range(num_batches):
