@@ -1,120 +1,73 @@
+"""Distributed pipeline driver application."""
 import argparse
 import gc
 import logging
 import os
 import time
+import numpy as np
 from PIL import Image
 import requests
 import torch
-from torch import nn
 from torch.distributed import rpc
-from torch.distributed.rpc import RRef
-from transformers import ViTFeatureExtractor
-from transformer import TransformerShard
+from transformers import BertTokenizer, ViTFeatureExtractor
+from transformer import BertDistTransformer, ViTDistTransformer
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log',level=logging.INFO)
 
-#########################################################
-#             Stitch Shards into one Module             #
-#########################################################
-class DistTransformer(nn.Module):
-    def __init__(self, model_name, model_file, world_size, num_split):
-        super().__init__()
-        self.world_size = world_size
-        self.num_split = num_split
-        self.rref_list = []
-        for i in range(world_size):
-            # Build Transformer Shard
-            is_first = i == 0
-            is_last = i == world_size-1
-            rref = rpc.remote(f"worker{i}", TransformerShard, args=(i, model_name, model_file, is_first, is_last, partition[2*i], partition[2*i+1], True))
-            self.rref_list.append(rref)
-
-    def forward(self, xs):
-        out_futures = []
-        for x in iter(xs.split(self.num_split, dim=0)):
-            skip = torch.zeros(x.size())
-            x = torch.stack((x, skip), 0)
-            x_rref = RRef(x)
-            for i in range(self.world_size-1):
-                x_rref = self.rref_list[i].remote().__call__(x_rref)
-            y_rref = self.rref_list[self.world_size-1].rpc_async().__call__(x_rref)
-            out_futures.append(y_rref)
-        # res = torch.cat(torch.futures.wait_all(out_futures))
-        # res = x_rref.to_here()
-        # del out_futures
-        # gc.collect()
-        # return torch.cat(torch.futures.wait_all(out_futures))
-        return torch.cat(torch.futures.wait_all(out_futures))
 
 #########################################################
 #                   Run RPC Processes                   #
 #########################################################
+class DistributedPipeline():
+    """The singleton distributed pipeline context manager."""
 
-def run_master(model_name, model_file, world_size, split_size, batch_size):
-    print("Run mastering \n")
-    latencies = []
-    throughputs = []
-    feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
-    ## for verification
-    # origin_model = ViTForImageClassification.from_pretrained(model_name)
-    for si in range(len(split_size)):
-        # print(f"Start Calcluate split size {split_size[si]}")
-        model =  DistTransformer(model_name, model_file, world_size, split_size[si])
-        inputs = feature_extractor(images=imgs, return_tensors="pt")
-        tik = time.time()
-        for i in range(num_batches):
-            # generate random inputs and labels
-            outputs = model(inputs['pixel_values'])
+    def __init__(self, world_size, rank, num_rpc_worker_threads):
+        self.world_size = world_size
+        self.rank = rank
+        self.num_rpc_worker_threads = num_rpc_worker_threads
+        self._initialized = False
+
+    def init(self):
+        """Initialize the distributed context."""
+        assert not self._initialized
+        # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
+        options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=self.num_rpc_worker_threads,
+                                                  rpc_timeout=3000)
+        rpc.init_rpc(f"worker{self.rank}",
+                     rank=self.rank,
+                     # backend=rpc.BackendType.PROCESS_GROUP,
+                     world_size=self.world_size,
+                     rpc_backend_options=options)
+        self._initialized = True
+
+    def shutdown(self):
+        """Wait for all RPCs to finish and shutdown the distributed context."""
+        assert self._initialized
+        self._initialized = False
+        rpc.shutdown()
+
+    def __enter__(self):
+        self.init()
+        return self
+
+    def __exit__(self, *args):
+        self.shutdown()
+
+    def forward_model(self, model, inputs, num_batches=1):
+        """Drive the distributed pipeline model with input data."""
+        assert self._initialized
+        ## for verification
+        # origin_model = ViTForImageClassification.from_pretrained(model_name)
+        for _ in range(num_batches):
+            outputs = model(inputs)
             print(f"outputs is {outputs}")
             logging.info(f"outputs is {outputs}")
             del outputs
             gc.collect()
             # predicted_class_idx = outputs[0].argmax(-1).item()
             # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
-        ## Calculate time
-        tok = time.time()
-        latency = tok-tik
-        throughput = num_batches*batch_size / latency
-        latencies.append(latency)
-        throughputs.append(throughput)
 
-    best_choice = -1
-    best_throughput  = -1
-    for i in range(len(split_size)):
-        print(f"Split size {split_size[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
-        logging.info(f"Split size {split_size[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
-        if throughputs[i] > best_throughput:
-            best_throughput = throughputs[i]
-            best_choice = i
-    print("\n---------------- Split output line ----------------")
-    print(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
-    logging.info(f"\nBest split size is {split_size[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
-
-
-def run_worker(model_name, model_file, rank, world_size, num_split, batch_size):
-
-    os.environ['MASTER_ADDR'] = args.addr #MASTER_ADDR
-    os.environ['MASTER_PORT'] = args.port # MASTER_PORT
-    os.environ["TP_SOCKET_IFNAME"] = args.socket_ifname #SOCKET_IFNAME
-    os.environ["GLOO_SOCKET_IFNAME"] = args.socket_ifname #SOCKET_IFNAME
-
-    # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
-    options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=num_worker_threads,rpc_timeout=3000)
-
-    rpc.init_rpc(
-        f"worker{rank}",
-        rank=rank,
-#         backend=rpc.BackendType.PROCESS_GROUP,
-        world_size=world_size,
-        rpc_backend_options=options
-    )
-    if rank == 0:
-        run_master(model_name, model_file, world_size, num_split, batch_size)
-
-    # block until all rpcs finisha
-    rpc.shutdown()
 
 if __name__=="__main__":
     #########################################################
@@ -123,8 +76,13 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime")
     parser.add_argument("rank", type=int, help="the rank for the current node")
     parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
-    parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224", choices=["google/vit-base-patch16-224",
-    "google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k"], help="the neural network model for loading")
+    parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224",
+                        choices=["google/vit-base-patch16-224",
+                                 "google/vit-large-patch16-224",
+                                 "google/vit-huge-patch14-224-in21k",
+                                 "bert-base-uncased",
+                                 "bert-large-uncased"],
+                        help="the neural network model for loading")
     parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
     parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
     parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
@@ -172,6 +130,8 @@ if __name__=="__main__":
         'google/vit-base-patch16-224': 'ViT-B_16-224.npz',
         'google/vit-large-patch16-224':'ViT-L_16-224.npz',
         'google/vit-huge-patch14-224-in21k': 'ViT-H_14.npz',
+        'bert-base-uncased': 'BERT-B.npz',
+        'bert-large-uncased': 'BERT-L.npz',
     }
     model_file = args.model_file
     if model_file is None:
@@ -179,7 +139,52 @@ if __name__=="__main__":
 
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
 
+    os.environ['MASTER_ADDR'] = args.addr # MASTER_ADDR
+    os.environ['MASTER_PORT'] = args.port # MASTER_PORT
+    os.environ["TP_SOCKET_IFNAME"] = args.socket_ifname # SOCKET_IFNAME
+    os.environ["GLOO_SOCKET_IFNAME"] = args.socket_ifname # SOCKET_IFNAME
+
     tik = time.time()
-    run_worker(model_name, model_file, rank, world_size, num_split, batch_size)
+    if model_name in ['bert-base-uncased', 'bert-large-uncased']:
+        DistTransformerClass = BertDistTransformer
+        bert_inputs = np.load("bert_input.npz")['input']
+        inputs_sentence = list(bert_inputs[0: batch_size])
+        # print(len(inputs_sentence))
+        tokenizer = BertTokenizer.from_pretrained(model_name)
+        inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
+    else:
+        DistTransformerClass = ViTDistTransformer
+        feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
+        inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
+    # init args happen to be the same for each dist class
+    xformer_args_split = [(model_name, model_file, world_size, partition, ss) for ss in num_split]
+
+    with DistributedPipeline(world_size, rank, num_worker_threads) as pipeline:
+        if rank == 0:
+            print("Run mastering \n")
+            latencies = []
+            throughputs = []
+            for ss, xformer_args in zip(num_split, xformer_args_split):
+                # print(f"Start calculate split size {ss}")
+                model = DistTransformerClass(*xformer_args)
+                tik_ss = time.time()
+                pipeline.forward_model(model, inputs, num_batches)
+                tok_ss = time.time()
+                latency = tok_ss - tik_ss
+                throughput = num_batches * batch_size / latency
+                latencies.append(latency)
+                throughputs.append(throughput)
+            best_choice = -1
+            best_throughput  = -1
+            for i, _ in enumerate(num_split):
+                print(f"Split size {num_split[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
+                logging.info(f"Split size {num_split[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
+                if throughputs[i] > best_throughput:
+                    best_throughput = throughputs[i]
+                    best_choice = i
+            print("\n---------------- Split output line ----------------")
+            print(f"\nBest split size is {num_split[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
+            logging.info(f"\nBest split size is {num_split[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
+
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")
