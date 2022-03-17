@@ -541,13 +541,14 @@ class ViTTransformerShard(TransformerShard):
     def forward(self, x):
         if self.is_rpc:
             x = x.to_here()
-        x, skip = x[0], x[1]
         with self._lock:
             logging.info(f"Start memory {self.process.memory_info().rss / 1000000} MB")
             start = time.time()
             if self.is_first:
                 x = self.embeddings(x)
                 skip = x
+            else:
+                x, skip = x[0], x[1]
 
             for i, op in enumerate(self.first_ops):
                 x, skip = self.forward_kernel(op, x, skip, (self.start_layer+i)%4)
@@ -603,11 +604,19 @@ class DistTransformer(nn.Module):
         self.rref_list = []
 
     def forward(self, xs):
-        """Still-abstract forward function."""
-        raise NotImplementedError
+        """Configure and run remote stages using RPC."""
+        out_futures = []
+        for x in iter(xs.split(self.num_split, dim=0)):
+            x_rref = RRef(x)
+            for i in range(self.world_size-1):
+                x_rref = self.rref_list[i].remote().__call__(x_rref)
+            y_rref = self.rref_list[self.world_size-1].rpc_async().__call__(x_rref)
+            out_futures.append(y_rref)
+        return torch.cat(torch.futures.wait_all(out_futures))
 
 
 class BertDistTransformer(DistTransformer):
+    """BERT distributed transformer."""
     def __init__(self, model_name, model_file, world_size, partition, num_split):
         super().__init__(world_size, num_split)
         for i in range(world_size):
@@ -619,22 +628,9 @@ class BertDistTransformer(DistTransformer):
                                     partition[2*i+1], True, True))
             self.rref_list.append(rref)
 
-    def forward(self, xs):
-        out_futures = []
-        for x in iter(xs.split(self.num_split, dim=0)):
-            x_rref = RRef(x)
-            for i in range(self.world_size-1):
-                x_rref = self.rref_list[i].remote().__call__(x_rref)
-            y_rref = self.rref_list[self.world_size-1].rpc_async().__call__(x_rref)
-            out_futures.append(y_rref)
-        # res = torch.cat(torch.futures.wait_all(out_futures))
-        # res = x_rref.to_here()
-        # del out_futures
-        # gc.collect()
-        return torch.cat(torch.futures.wait_all(out_futures))
-
 
 class ViTDistTransformer(DistTransformer):
+    """ViT distributed transformer."""
     def __init__(self, model_name, model_file, world_size, partition, num_split):
         super().__init__(world_size, num_split)
         for i in range(world_size):
@@ -645,19 +641,3 @@ class ViTDistTransformer(DistTransformer):
                               args=(i, model_name, model_file, is_first, is_last, partition[2*i],
                                     partition[2*i+1], True, True))
             self.rref_list.append(rref)
-
-    def forward(self, xs):
-        out_futures = []
-        for x in iter(xs.split(self.num_split, dim=0)):
-            skip = torch.zeros(x.size())
-            x = torch.stack((x, skip), 0)
-            x_rref = RRef(x)
-            for i in range(self.world_size-1):
-                x_rref = self.rref_list[i].remote().__call__(x_rref)
-            y_rref = self.rref_list[self.world_size-1].rpc_async().__call__(x_rref)
-            out_futures.append(y_rref)
-        # res = torch.cat(torch.futures.wait_all(out_futures))
-        # res = x_rref.to_here()
-        # del out_futures
-        # gc.collect()
-        return torch.cat(torch.futures.wait_all(out_futures))
