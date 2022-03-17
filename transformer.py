@@ -21,7 +21,7 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 class TransformerShard(nn.Module):
     """Parent class for transformer shards."""
 
-    def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
+    def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True, is_rpc=False):
         super().__init__()
         self.rank = rank
         self.model_name = model_name
@@ -31,6 +31,7 @@ class TransformerShard(nn.Module):
         self.start_layer = start_layer
         self.end_layer = end_layer
         self.load_weight = load_weight
+        self.is_rpc = is_rpc
 
         self.operators_list = [ "LayerNorm + Attention",
                                 "Attention Output + residuel Connection",
@@ -51,14 +52,14 @@ class TransformerShard(nn.Module):
         self.total_data = 0
         self.batch_0_finish = 0
 
-    def forward(self, x_rref):
+    def forward(self, x):
         """Still-abstract forward function."""
         raise NotImplementedError
 
 
 class BertTransformerShard(TransformerShard):
-    def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
-        super().__init__(rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight)
+    def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True, is_rpc=False):
+        super().__init__(rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight, is_rpc)
         self.embeddings = None
 
         print(f">>>> Model name {model_name}")
@@ -267,20 +268,16 @@ class BertTransformerShard(TransformerShard):
 
 
     @torch.no_grad()
-    def forward(self, x_rref):
-        # a = time.time()
-        if self.is_first:
-            x = x_rref.to_here()
-            # print(f"\n---\n forward here is {x}")
-        else:
-            x, skip = x_rref.to_here()
-        # b = time.time()
-        # print(f"x ref is {b-a}")
+    def forward(self, x):
+        if self.is_rpc:
+            x = x.to_here()
         with self._lock:
             start = time.time()
             if self.is_first:
                 x = self.embeddings(x)
                 skip = x
+            else:
+                x, skip = x[0], x[1]
 
             for i, op in enumerate(self.first_ops):
                 x, skip = self.forward_kernel(op, x, skip, (self.start_layer+i)%4)
@@ -318,8 +315,8 @@ class BertTransformerShard(TransformerShard):
 
 
 class ViTTransformerShard(TransformerShard):
-    def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
-        super().__init__(rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight)
+    def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True, is_rpc=False):
+        super().__init__(rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight, is_rpc)
         self.embeddings = None
         self.layernorm = None
         self.classifier = None
@@ -541,14 +538,10 @@ class ViTTransformerShard(TransformerShard):
 
 
     @torch.no_grad()
-    def forward(self, x_rref):
-        # if self.is_first:
-        #     x = x_rref.to_here()
-        # else:
-        #     x, skip = x_rref.to_here()
-        x = x_rref.to_here()
-        skip = x[1]
-        x = x[0]
+    def forward(self, x):
+        if self.is_rpc:
+            x = x.to_here()
+        x, skip = x[0], x[1]
         with self._lock:
             logging.info(f"Start memory {self.process.memory_info().rss / 1000000} MB")
             start = time.time()
@@ -609,7 +602,7 @@ class DistTransformer(nn.Module):
         self.num_split = num_split
         self.rref_list = []
 
-    def forward(self, x_rref):
+    def forward(self, xs):
         """Still-abstract forward function."""
         raise NotImplementedError
 
@@ -623,7 +616,7 @@ class BertDistTransformer(DistTransformer):
             is_last = i == world_size-1
             rref = rpc.remote(f"worker{i}", BertTransformerShard,
                               args=(i, model_name, model_file, is_first, is_last, partition[2*i],
-                                    partition[2*i+1], True))
+                                    partition[2*i+1], True, True))
             self.rref_list.append(rref)
 
     def forward(self, xs):
@@ -650,7 +643,7 @@ class ViTDistTransformer(DistTransformer):
             is_last = i == world_size-1
             rref = rpc.remote(f"worker{i}", ViTTransformerShard,
                               args=(i, model_name, model_file, is_first, is_last, partition[2*i],
-                                    partition[2*i+1], True))
+                                    partition[2*i+1], True, True))
             self.rref_list.append(rref)
 
     def forward(self, xs):
