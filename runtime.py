@@ -10,7 +10,7 @@ import requests
 import torch
 from torch.distributed import rpc
 from transformers import BertTokenizer, ViTFeatureExtractor
-from transformer import BertDistTransformer, ViTDistTransformer
+from transformer import BertDistRpcTransformer, ViTDistRpcTransformer
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log',level=logging.INFO)
@@ -19,8 +19,8 @@ logging.basicConfig(filename='runtime.log',level=logging.INFO)
 #########################################################
 #                   Run RPC Processes                   #
 #########################################################
-class DistributedPipeline():
-    """The singleton distributed pipeline context manager."""
+class DistRpcPipeline():
+    """The singleton distributed RPC pipeline context manager."""
 
     def __init__(self, world_size, rank, num_rpc_worker_threads):
         self.world_size = world_size
@@ -155,14 +155,14 @@ if __name__=="__main__":
         feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
         inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
 
-    with DistributedPipeline(world_size, rank, num_worker_threads) as pipeline:
+    with DistRpcPipeline(world_size, rank, num_worker_threads) as pipeline:
         if rank == 0:
             print("Run mastering \n")
             # Create model shards on workers (requires distributed context to be initialized)
             if model_name in ['bert-base-uncased', 'bert-large-uncased']:
-                model = BertDistTransformer(model_name, model_file, world_size, partition)
+                model = BertDistRpcTransformer(model_name, model_file, world_size, partition)
             else:
-                model = ViTDistTransformer(model_name, model_file, world_size, partition)
+                model = ViTDistRpcTransformer(model_name, model_file, world_size, partition)
             latencies = []
             throughputs = []
             for split_size in num_split:

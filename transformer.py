@@ -595,8 +595,8 @@ class ViTTransformerShard(TransformerShard):
 #             Stitch Shards into one Module             #
 #########################################################
 
-class DistTransformer(nn.Module):
-    """Parent class for distributed transformers."""
+class DistRpcTransformer(nn.Module):
+    """Parent class for distributed RPC transformers."""
     def __init__(self, world_size):
         super().__init__()
         self.world_size = world_size
@@ -615,8 +615,8 @@ class DistTransformer(nn.Module):
         return torch.cat(torch.futures.wait_all(out_futures))
 
 
-class BertDistTransformer(DistTransformer):
-    """BERT distributed transformer."""
+class BertDistRpcTransformer(DistRpcTransformer):
+    """BERT distributed RPC transformer."""
     def __init__(self, model_name, model_file, world_size, partition):
         super().__init__(world_size)
         for i in range(world_size):
@@ -629,8 +629,8 @@ class BertDistTransformer(DistTransformer):
             self.rref_list.append(rref)
 
 
-class ViTDistTransformer(DistTransformer):
-    """ViT distributed transformer."""
+class ViTDistRpcTransformer(DistRpcTransformer):
+    """ViT distributed RPC transformer."""
     def __init__(self, model_name, model_file, world_size, partition):
         super().__init__(world_size)
         for i in range(world_size):
