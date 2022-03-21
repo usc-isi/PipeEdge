@@ -54,19 +54,24 @@ class DistRpcPipeline():
     def __exit__(self, *args):
         self.shutdown()
 
-    def forward_model(self, model, inputs, split_size, num_batches=1):
+    def forward_model(self, model, inputs, split_size, num_batches, results_cb):
         """Drive the distributed pipeline model with input data."""
         assert self._initialized
-        ## for verification
-        # origin_model = ViTForImageClassification.from_pretrained(model_name)
         for _ in range(num_batches):
             outputs = model(inputs, split_size=split_size)
-            print(f"outputs is {outputs}")
-            logging.info(f"outputs is {outputs}")
-            del outputs
-            gc.collect()
-            # predicted_class_idx = outputs[0].argmax(-1).item()
-            # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
+            results_cb(outputs)
+
+
+## for verification
+# origin_model = ViTForImageClassification.from_pretrained(model_name)
+def handle_results(tensors):
+    """Process result tensors"""
+    print(f"outputs is {tensors}")
+    logging.info(f"outputs is {tensors}")
+    del tensors
+    gc.collect()
+    # predicted_class_idx = tensors[0].argmax(-1).item()
+    # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
 
 
 if __name__=="__main__":
@@ -168,7 +173,7 @@ if __name__=="__main__":
             for split_size in num_split:
                 # print(f"Start calculate split size {split_size}")
                 tik_ss = time.time()
-                pipeline.forward_model(model, inputs, split_size, num_batches)
+                pipeline.forward_model(model, inputs, split_size, num_batches, handle_results)
                 tok_ss = time.time()
                 latency = tok_ss - tik_ss
                 throughput = num_batches * batch_size / latency
