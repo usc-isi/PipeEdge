@@ -54,12 +54,11 @@ class DistRpcPipeline():
     def __exit__(self, *args):
         self.shutdown()
 
-    def forward_model(self, model, inputs, split_size, num_batches, results_cb):
+    def forward_model(self, model, inputs, split_size, results_cb):
         """Drive the distributed pipeline model with input data."""
         assert self._initialized
-        for _ in range(num_batches):
-            outputs = model(inputs, split_size=split_size)
-            results_cb(outputs)
+        outputs = model(inputs, split_size=split_size)
+        results_cb(outputs)
 
 
 ## for verification
@@ -72,6 +71,33 @@ def handle_results(tensors):
     gc.collect()
     # predicted_class_idx = tensors[0].argmax(-1).item()
     # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
+
+
+def profile_split_sizes(split_sizes, num_batches, batch_size, callback):
+    """Iterate over split_sizes and num_batches."""
+    latencies = []
+    throughputs = []
+    for split_size in split_sizes:
+        # print(f"Start calculate split size {split_size}")
+        tik_ss = time.time()
+        for _ in range(num_batches):
+            callback(split_size)
+        tok_ss = time.time()
+        latency = tok_ss - tik_ss
+        throughput = num_batches * batch_size / latency
+        latencies.append(latency)
+        throughputs.append(throughput)
+    best_choice = -1
+    best_throughput = -1
+    for i, _ in enumerate(split_sizes):
+        print(f"Split size {split_sizes[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
+        logging.info(f"Split size {split_sizes[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
+        if throughputs[i] > best_throughput:
+            best_throughput = throughputs[i]
+            best_choice = i
+    print("\n---------------- Split output line ----------------")
+    print(f"\nBest split size is {split_sizes[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
+    logging.info(f"\nBest split size is {split_sizes[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
 
 
 if __name__=="__main__":
@@ -168,28 +194,11 @@ if __name__=="__main__":
                 model = BertDistRpcTransformer(model_name, model_file, world_size, partition)
             else:
                 model = ViTDistRpcTransformer(model_name, model_file, world_size, partition)
-            latencies = []
-            throughputs = []
-            for split_size in num_split:
-                # print(f"Start calculate split size {split_size}")
-                tik_ss = time.time()
-                pipeline.forward_model(model, inputs, split_size, num_batches, handle_results)
-                tok_ss = time.time()
-                latency = tok_ss - tik_ss
-                throughput = num_batches * batch_size / latency
-                latencies.append(latency)
-                throughputs.append(throughput)
-            best_choice = -1
-            best_throughput  = -1
-            for i, _ in enumerate(num_split):
-                print(f"Split size {num_split[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
-                logging.info(f"Split size {num_split[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
-                if throughputs[i] > best_throughput:
-                    best_throughput = throughputs[i]
-                    best_choice = i
-            print("\n---------------- Split output line ----------------")
-            print(f"\nBest split size is {num_split[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
-            logging.info(f"\nBest split size is {num_split[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
+            def drive_pipeline(split_size):
+                """Feed the pipeline."""
+                # this call is synchronous - it won't return until it has the results
+                pipeline.forward_model(model, inputs, split_size, handle_results)
+            profile_split_sizes(num_split, num_batches, batch_size, drive_pipeline)
 
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")
