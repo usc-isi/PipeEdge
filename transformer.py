@@ -597,16 +597,16 @@ class ViTTransformerShard(TransformerShard):
 
 class DistTransformer(nn.Module):
     """Parent class for distributed transformers."""
-    def __init__(self, world_size, num_split):
+    def __init__(self, world_size):
         super().__init__()
         self.world_size = world_size
-        self.num_split = num_split
         self.rref_list = []
 
-    def forward(self, xs):
+    def forward(self, xs, **kwargs):
         """Configure and run remote stages using RPC."""
+        split_size = kwargs.get('split_size', len(xs))
         out_futures = []
-        for x in iter(xs.split(self.num_split, dim=0)):
+        for x in iter(xs.split(split_size, dim=0)):
             x_rref = RRef(x)
             for i in range(self.world_size-1):
                 x_rref = self.rref_list[i].remote().__call__(x_rref)
@@ -617,8 +617,8 @@ class DistTransformer(nn.Module):
 
 class BertDistTransformer(DistTransformer):
     """BERT distributed transformer."""
-    def __init__(self, model_name, model_file, world_size, partition, num_split):
-        super().__init__(world_size, num_split)
+    def __init__(self, model_name, model_file, world_size, partition):
+        super().__init__(world_size)
         for i in range(world_size):
             # Build Transformer Shard
             is_first = i == 0
@@ -631,8 +631,8 @@ class BertDistTransformer(DistTransformer):
 
 class ViTDistTransformer(DistTransformer):
     """ViT distributed transformer."""
-    def __init__(self, model_name, model_file, world_size, partition, num_split):
-        super().__init__(world_size, num_split)
+    def __init__(self, model_name, model_file, world_size, partition):
+        super().__init__(world_size)
         for i in range(world_size):
             # Build Transformer Shard
             is_first = i == 0

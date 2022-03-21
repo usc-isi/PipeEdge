@@ -54,13 +54,13 @@ class DistributedPipeline():
     def __exit__(self, *args):
         self.shutdown()
 
-    def forward_model(self, model, inputs, num_batches=1):
+    def forward_model(self, model, inputs, split_size, num_batches=1):
         """Drive the distributed pipeline model with input data."""
         assert self._initialized
         ## for verification
         # origin_model = ViTForImageClassification.from_pretrained(model_name)
         for _ in range(num_batches):
-            outputs = model(inputs)
+            outputs = model(inputs, split_size=split_size)
             print(f"outputs is {outputs}")
             logging.info(f"outputs is {outputs}")
             del outputs
@@ -146,29 +146,29 @@ if __name__=="__main__":
 
     tik = time.time()
     if model_name in ['bert-base-uncased', 'bert-large-uncased']:
-        DistTransformerClass = BertDistTransformer
         bert_inputs = np.load("bert_input.npz")['input']
         inputs_sentence = list(bert_inputs[0: batch_size])
         # print(len(inputs_sentence))
         tokenizer = BertTokenizer.from_pretrained(model_name)
         inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
     else:
-        DistTransformerClass = ViTDistTransformer
         feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
         inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
-    # init args happen to be the same for each dist class
-    xformer_args_split = [(model_name, model_file, world_size, partition, ss) for ss in num_split]
 
     with DistributedPipeline(world_size, rank, num_worker_threads) as pipeline:
         if rank == 0:
             print("Run mastering \n")
+            # Create model shards on workers (requires distributed context to be initialized)
+            if model_name in ['bert-base-uncased', 'bert-large-uncased']:
+                model = BertDistTransformer(model_name, model_file, world_size, partition)
+            else:
+                model = ViTDistTransformer(model_name, model_file, world_size, partition)
             latencies = []
             throughputs = []
-            for ss, xformer_args in zip(num_split, xformer_args_split):
-                # print(f"Start calculate split size {ss}")
-                model = DistTransformerClass(*xformer_args)
+            for split_size in num_split:
+                # print(f"Start calculate split size {split_size}")
                 tik_ss = time.time()
-                pipeline.forward_model(model, inputs, num_batches)
+                pipeline.forward_model(model, inputs, split_size, num_batches)
                 tok_ss = time.time()
                 latency = tok_ss - tik_ss
                 throughput = num_batches * batch_size / latency
