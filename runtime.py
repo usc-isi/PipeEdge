@@ -23,21 +23,21 @@ class DistRpcPipeline():
     """The singleton distributed RPC pipeline context manager."""
 
     def __init__(self, world_size, rank, num_rpc_worker_threads):
-        self.world_size = world_size
-        self.rank = rank
-        self.num_rpc_worker_threads = num_rpc_worker_threads
+        self._world_size = world_size
+        self._rank = rank
+        self._num_rpc_worker_threads = num_rpc_worker_threads
         self._initialized = False
 
     def init(self):
         """Initialize the distributed context."""
         assert not self._initialized
         # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
-        options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=self.num_rpc_worker_threads,
+        options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=self._num_rpc_worker_threads,
                                                   rpc_timeout=3000)
-        rpc.init_rpc(f"worker{self.rank}",
-                     rank=self.rank,
+        rpc.init_rpc(f"worker{self._rank}",
+                     rank=self._rank,
                      # backend=rpc.BackendType.PROCESS_GROUP,
-                     world_size=self.world_size,
+                     world_size=self._world_size,
                      rpc_backend_options=options)
         self._initialized = True
 
