@@ -190,10 +190,11 @@ if __name__=="__main__":
         if rank == 0:
             print("Run mastering \n")
             # Create model shards on workers (requires distributed context to be initialized)
+            stage_ranks = list(range(len(partition) // 2))
             if model_name in ['bert-base-uncased', 'bert-large-uncased']:
-                model = BertDistRpcTransformer(model_name, model_file, world_size, partition)
+                model = BertDistRpcTransformer(model_name, model_file, stage_ranks, partition)
             else:
-                model = ViTDistRpcTransformer(model_name, model_file, world_size, partition)
+                model = ViTDistRpcTransformer(model_name, model_file, stage_ranks, partition)
             def drive_pipeline(split_size):
                 """Feed the pipeline."""
                 # this call is synchronous - it won't return until it has the results

@@ -21,9 +21,9 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 class TransformerShard(nn.Module):
     """Parent class for transformer shards."""
 
-    def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True, is_rpc=False):
+    def __init__(self, stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True, is_rpc=False):
         super().__init__()
-        self.rank = rank
+        self.stage = stage
         self.model_name = model_name
         self.weights_file_name = model_file
         self.is_first = is_first
@@ -58,15 +58,15 @@ class TransformerShard(nn.Module):
 
 
 class BertTransformerShard(TransformerShard):
-    def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True, is_rpc=False):
-        super().__init__(rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight, is_rpc)
+    def __init__(self, stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True, is_rpc=False):
+        super().__init__(stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight, is_rpc)
         self.embeddings = None
 
         print(f">>>> Model name {model_name}")
         if self.load_weight:
             print(f">>>> Load weight file {self.weights_file_name}")
         self._make_layer()
-        print(f"======= Finish Build BertTransformerShard{self.rank} ==========")
+        print(f"======= Finish Build BertTransformerShard{self.stage} ==========")
 
     def _make_layer(self):
         ## first Shard
@@ -305,7 +305,7 @@ class BertTransformerShard(TransformerShard):
         self.total_time +=  (end - start)
         self.total_batch += 1
         print(f"Round {self.total_batch}: memory {self.process.memory_info().rss // 1000000} MB")
-        print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
+        print(f"Shard{self.stage} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         if self.is_last:
             return x
         return x, skip
@@ -315,8 +315,8 @@ class BertTransformerShard(TransformerShard):
 
 
 class ViTTransformerShard(TransformerShard):
-    def __init__(self, rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True, is_rpc=False):
-        super().__init__(rank, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight, is_rpc)
+    def __init__(self, stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True, is_rpc=False):
+        super().__init__(stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight, is_rpc)
         self.embeddings = None
         self.layernorm = None
         self.classifier = None
@@ -326,8 +326,8 @@ class ViTTransformerShard(TransformerShard):
             print(f">>>> Load weight file {self.weights_file_name}")
             logging.info(f">>>> Load weight file f{self.weights_file_name}")
         self._make_layer()
-        print(f"======= Finish Build ViTTransformerShard{self.rank} ==========")
-        logging.info(f"======= Finish Build ViTTransformerShard{self.rank} ==========")
+        print(f"======= Finish Build ViTTransformerShard{self.stage} ==========")
+        logging.info(f"======= Finish Build ViTTransformerShard{self.stage} ==========")
 
     def _make_layer(self):
         ## first Shard
@@ -583,9 +583,9 @@ class ViTTransformerShard(TransformerShard):
             self.total_batch += 1
 
         print(f"Round {self.total_batch}: memory {self.process.memory_info().rss / 1000000} MB")
-        print(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
+        print(f"Shard{self.stage} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         logging.info(f"Round {self.total_batch}: memory {self.process.memory_info().rss / 1000000} MB")
-        logging.info(f"Shard{self.rank} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
+        logging.info(f"Shard{self.stage} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         if self.is_last:
             return x
         return x, skip
@@ -597,9 +597,8 @@ class ViTTransformerShard(TransformerShard):
 
 class DistRpcTransformer(nn.Module):
     """Parent class for distributed RPC transformers."""
-    def __init__(self, world_size):
+    def __init__(self):
         super().__init__()
-        self.world_size = world_size
         self.rref_list = []
 
     def forward(self, xs, **kwargs):
@@ -608,22 +607,22 @@ class DistRpcTransformer(nn.Module):
         out_futures = []
         for x in iter(xs.split(split_size, dim=0)):
             x_rref = RRef(x)
-            for i in range(self.world_size-1):
-                x_rref = self.rref_list[i].remote().__call__(x_rref)
-            y_rref = self.rref_list[self.world_size-1].rpc_async().__call__(x_rref)
+            for rref in self.rref_list[:-1]:
+                x_rref = rref.remote().__call__(x_rref)
+            y_rref = self.rref_list[-1].rpc_async().__call__(x_rref)
             out_futures.append(y_rref)
         return torch.cat(torch.futures.wait_all(out_futures))
 
 
 class BertDistRpcTransformer(DistRpcTransformer):
     """BERT distributed RPC transformer."""
-    def __init__(self, model_name, model_file, world_size, partition):
-        super().__init__(world_size)
-        for i in range(world_size):
+    def __init__(self, model_name, model_file, stage_ranks, partition):
+        super().__init__()
+        for i, dst_rank in enumerate(stage_ranks):
             # Build Transformer Shard
             is_first = i == 0
-            is_last = i == world_size-1
-            rref = rpc.remote(f"worker{i}", BertTransformerShard,
+            is_last = i == len(stage_ranks) - 1
+            rref = rpc.remote(dst_rank, BertTransformerShard,
                               args=(i, model_name, model_file, is_first, is_last, partition[2*i],
                                     partition[2*i+1], True, True))
             self.rref_list.append(rref)
@@ -631,13 +630,13 @@ class BertDistRpcTransformer(DistRpcTransformer):
 
 class ViTDistRpcTransformer(DistRpcTransformer):
     """ViT distributed RPC transformer."""
-    def __init__(self, model_name, model_file, world_size, partition):
-        super().__init__(world_size)
-        for i in range(world_size):
+    def __init__(self, model_name, model_file, stage_ranks, partition):
+        super().__init__()
+        for i, dst_rank in enumerate(stage_ranks):
             # Build Transformer Shard
             is_first = i == 0
-            is_last = i == world_size-1
-            rref = rpc.remote(f"worker{i}", ViTTransformerShard,
+            is_last = i == len(stage_ranks) - 1
+            rref = rpc.remote(dst_rank, ViTTransformerShard,
                               args=(i, model_name, model_file, is_first, is_last, partition[2*i],
                                     partition[2*i+1], True, True))
             self.rref_list.append(rref)
