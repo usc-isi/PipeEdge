@@ -116,6 +116,8 @@ if __name__=="__main__":
                         help="the neural network model for loading")
     parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
     parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
+    parser.add_argument("-r", "--rank-order", type=str, default=None,
+                        help="comma-delimited list of ranks in desired stage order; default: natural rank order until partitions are assigned")
     parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
     parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
     parser.add_argument("-s", "--socket-ifname", type=str, default="lo0", help="socket iframe name, use [ifconfig | ipaddress] to check")
@@ -140,6 +142,11 @@ if __name__=="__main__":
     #########################################################
     # *****  Define the World Size and partition Method ******#
     partition =   [int(i) for i in args.partition.split(',')]
+    if args.rank_order is None:
+        # use natural rank order
+        stage_ranks = list(range(len(partition) // 2))
+    else:
+        stage_ranks = [int(i) for i in args.rank_order.split(',')]
     num_batches = args.num_batches
     batch_size = args.batch_size
     num_worker_threads = args.worker_threads
@@ -187,10 +194,9 @@ if __name__=="__main__":
         inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
 
     with DistRpcPipeline(world_size, rank, num_worker_threads) as pipeline:
-        if rank == 0:
+        if rank == stage_ranks[0]:
             print("Run mastering \n")
             # Create model shards on workers (requires distributed context to be initialized)
-            stage_ranks = list(range(len(partition) // 2))
             if model_name in ['bert-base-uncased', 'bert-large-uncased']:
                 model = BertDistRpcTransformer(model_name, model_file, stage_ranks, partition)
             else:
