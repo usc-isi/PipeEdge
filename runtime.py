@@ -17,6 +17,7 @@ from edgepipe.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_fac
 from edgepipe.quantization.hook import forward_hook_quant_encode, forward_pre_hook_quant_decode
 from edgepipe.sched.scheduler import sched_pipeline
 import model_cfg
+import monitoring
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log', level=logging.DEBUG)
@@ -31,6 +32,94 @@ IMG_URL = 'http://images.cocodataset.org/val2017/000000039769.jpg'
 
 CMD_STOP = 0
 CMD_SCHED = 1
+
+
+MONITORING_KEY_MODEL = 'shard'
+MONITORING_KEY_OUTPUT = 'output'
+MONITORING_KEY_QUANT_DECODE = 'quant_decode'
+MONITORING_KEY_QUANT_ENCODE = 'quant_encode'
+MONITORING_KEY_RECV = 'recv'
+MONITORING_KEY_SEND = 'send'
+
+def _inputs_microbatch_size(inputs):
+    """Get the microbatch size from the inputs tuple."""
+    assert isinstance(inputs, tuple)
+    assert len(inputs) > 0
+    if isinstance(inputs[0], torch.Tensor):
+        # a single tensor
+        ubatch_size = len(inputs[0])
+    else:
+        # a tuple of tensors
+        assert isinstance(inputs[0], tuple)
+        assert len(inputs[0]) > 0
+        ubatch_size = len(inputs[0][0])
+        # Sanity check that tensors are the same length (then tuple tensor order doesn't matter)
+        for tensor in inputs[0]:
+            assert isinstance(tensor, torch.Tensor)
+            assert len(tensor) == ubatch_size
+    return ubatch_size
+
+def _outputs_microbatch_size(outputs):
+    """Get the microbatch size from the outputs tensor or tuple."""
+    if isinstance(outputs, torch.Tensor):
+        outputs = (outputs,)
+    assert isinstance(outputs, tuple)
+    assert len(outputs) > 0
+    ubatch_size = len(outputs[0])
+    # Sanity check that tensors are the same length (then tuple tensor order doesn't matter)
+    for tensor in outputs:
+        assert isinstance(tensor, torch.Tensor)
+        assert len(tensor) == ubatch_size
+    return ubatch_size
+
+def forward_pre_hook_monitor(_module, _inputs) -> None:
+    """Register iteration start."""
+    monitoring.iteration_start(MONITORING_KEY_MODEL)
+
+def forward_hook_monitor(module, _inputs, outputs) -> None:
+    """Register iteration completion."""
+    # Measure work as the microbatch size
+    n_items = _outputs_microbatch_size(outputs)
+    # Measure accuracy as the number of layers processed
+    n_layers = module.end_layer - module.start_layer + 1
+    monitoring.iteration(MONITORING_KEY_MODEL, work=n_items, accuracy=n_layers)
+
+def forward_pre_hook_quant_decode_start(_module, _inputs) -> None:
+    """Register quantization decode start."""
+    monitoring.iteration_start(MONITORING_KEY_QUANT_DECODE)
+
+def forward_pre_hook_quant_decode_finish(module, inputs) -> None:
+    """Register quantization decode completion."""
+    # Measure work as the microbatch size, but quantization only does work if quant_bits > 0.
+    quant_bits = module.quant_bits.tolist()[0]
+    n_items = _inputs_microbatch_size(inputs) if quant_bits > 0 else 0
+    monitoring.iteration(MONITORING_KEY_QUANT_DECODE, work=n_items, accuracy=quant_bits)
+
+def forward_hook_quant_encode_start(_module, _inputs, _outputs) -> None:
+    """Register quantization encode start."""
+    monitoring.iteration_start(MONITORING_KEY_QUANT_ENCODE)
+
+def forward_hook_quant_encode_finish(module, inputs, _outputs) -> None:
+    """Register quantization encode completion."""
+    # Measure work as the microbatch size, but quantization only does work if quant_bits > 0.
+    # If output tensors are encoded, they're collapsed s.t. we can't infer the microbatch size.
+    # We'll rely on the inputs instead.
+    quant_bits = module.quant_bits.tolist()[1]
+    n_items = _inputs_microbatch_size(inputs) if quant_bits > 0 else 0
+    monitoring.iteration(MONITORING_KEY_QUANT_ENCODE, work=n_items, accuracy=quant_bits)
+
+def p2p_pre_hook_monitor(key):
+    """Register send/recv start."""
+    monitoring.iteration_start(key)
+
+def p2p_post_hook_monitor(tensors, key):
+    """Register send/recv completion."""
+    assert isinstance(tensors, tuple)
+    # Measure work in total data size (MBits), which is a useful metric for data transfers.
+    # We don't have enough context here to map tensor structure to a higher-level work concept.
+    mbits = sum([t.numel() * t.numpy().dtype.itemsize for t in tensors]) * 8 / 1000000
+    # Accuracy has no meaning here.
+    monitoring.iteration(key, work=mbits)
 
 
 class ThreadSafeCounter():
@@ -68,8 +157,18 @@ results_counter = ThreadSafeCounter()
 # origin_model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224')
 def handle_results(tensors):
     """Process result tensors"""
+    # Monitoring here is intended to measure time between results, NOT end-to-end pipeline latency.
+    # Here we use a traditional Application Heartbeats approach, without an explicit start.
+    # Therefore, an initial iteration should be reported prior to here to indicate the start (e.g.,
+    # when the pipeline is initialized), otherwise metrics from the first report will be lost.
+    # Measure work as the microbatch size.
+    n_items = _outputs_microbatch_size(tensors)
+    # Measure accuracy as the prediction confidence values.
+    # Use softmax to get probability distribution for each tensor.
+    prob_sum = torch.nn.functional.softmax(tensors, dim=-1).max(dim=-1)[0].sum().item()
+    monitoring.iteration(MONITORING_KEY_OUTPUT, work=n_items, accuracy=prob_sum, safe=False)
     logger.info("outputs is %s", tensors)
-    results_counter.add(len(tensors))
+    results_counter.add(n_items)
     # predicted_class_idx = tensors[0].argmax(-1).item()
     # logger.info("Predicted class: %s", origin_model.config.id2label[predicted_class_idx])
 
@@ -312,8 +411,14 @@ def main():
                                args.sched_models_file, args.sched_dev_types_file,
                                args.sched_dev_file)
 
+    monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
+    monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='confidence')
+    monitoring.add_key(MONITORING_KEY_QUANT_DECODE, work_type='tensors', acc_type='bits')
+    monitoring.add_key(MONITORING_KEY_QUANT_ENCODE, work_type='tensors', acc_type='bits')
     tik = time.time()
     if args.comm == 'p2p':
+        monitoring.add_key(MONITORING_KEY_RECV, work_type='Mbits')
+        monitoring.add_key(MONITORING_KEY_SEND, work_type='Mbits')
         # Initialize the distributed P2P context
         with DistP2pContext(('gloo',), { 'world_size': world_size, 'rank': rank }, handle_cmd) \
             as dist_ctx:
@@ -343,15 +448,27 @@ def main():
                                                        stage_layers[stage][1], stage)
                 q_bits = torch.tensor((0 if stage == 0 else stage_quant[stage - 1], stage_quant[stage]))
                 model.register_buffer('quant_bits', q_bits)
+                model.register_forward_hook(forward_hook_monitor)
                 if stage != len(stage_ranks) - 1:
+                    model.register_forward_hook(forward_hook_quant_encode_start)
                     model.register_forward_hook(forward_hook_quant_encode)
+                    model.register_forward_hook(forward_hook_quant_encode_finish)
                 if stage != 0:
+                    model.register_forward_pre_hook(forward_pre_hook_quant_decode_start)
                     model.register_forward_pre_hook(forward_pre_hook_quant_decode)
+                    model.register_forward_pre_hook(forward_pre_hook_quant_decode_finish)
+                model.register_forward_pre_hook(forward_pre_hook_monitor)
             # Initialize the stage context
             with DistP2pPipelineStage(stage_ranks, stage, model, handle_results) as stage_ctx:
+                stage_ctx.register_recv_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_RECV,))
+                stage_ctx.register_recv_post_hook(p2p_post_hook_monitor, (MONITORING_KEY_RECV,))
+                stage_ctx.register_send_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_SEND,))
+                stage_ctx.register_send_post_hook(p2p_post_hook_monitor, (MONITORING_KEY_SEND,))
                 if stage == 0:
                     inputs = load_inputs(model_name, batch_size)
                     tik_data = time.time()
+                    # start results monitoring - see comments in handle_results
+                    monitoring.iteration(MONITORING_KEY_OUTPUT, work=0, accuracy=0, safe=False)
                     # this call is asynchronous - wait for results to get end-to-end timings
                     start_count = results_counter.value
                     stage_ctx.enqueue_batch(inputs, ubatch_size)
@@ -395,9 +512,17 @@ def main():
                 q_bits = [torch.tensor((0 if s == 0 else stage_quant[s - 1], stage_quant[s]))
                           for s in range(len(stage_quant))]
                 pipeline.rpc_register_buffer('quant_bits', q_bits)
+                pipeline.rpc_register_forward_hook(forward_hook_monitor)
+                pipeline.rpc_register_forward_hook(forward_hook_quant_encode_start, last=False)
                 pipeline.rpc_register_forward_hook(forward_hook_quant_encode, last=False)
+                pipeline.rpc_register_forward_hook(forward_hook_quant_encode_finish, last=False)
+                pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode_start, first=False)
                 pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode, first=False)
+                pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode_finish, first=False)
+                pipeline.rpc_register_forward_pre_hook(forward_pre_hook_monitor)
                 tik_data = time.time()
+                # start results monitoring - see comments in handle_results
+                monitoring.iteration(MONITORING_KEY_OUTPUT, work=0, accuracy=0, safe=False)
                 # this call is asynchronous - wait for results to get end-to-end timings
                 start_count = results_counter.value
                 pipeline.enqueue_batch(inputs, ubatch_size)
@@ -407,6 +532,7 @@ def main():
                 throughput = batch_size / latency
                 logger.info("Latency is %f, throughput is %f", latency, throughput)
     tok = time.time()
+    monitoring.finish()
     logger.info("Total program execution time = %f", tok - tik)
 
 
