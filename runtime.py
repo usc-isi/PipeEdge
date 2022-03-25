@@ -10,7 +10,7 @@ import requests
 import torch
 from torch.distributed import rpc
 from transformers import BertTokenizer, ViTFeatureExtractor
-from transformer import BertDistRpcTransformer, ViTDistRpcTransformer
+from edgepipe.comm.rpc.transformers import BertDistRpcTransformer, ViTDistRpcTransformer
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log',level=logging.INFO)
