@@ -21,7 +21,7 @@ from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSel
 class TransformerShard(nn.Module):
     """Parent class for transformer shards."""
 
-    def __init__(self, stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True, is_rpc=False):
+    def __init__(self, stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
         super().__init__()
         self.stage = stage
         self.model_name = model_name
@@ -31,7 +31,6 @@ class TransformerShard(nn.Module):
         self.start_layer = start_layer
         self.end_layer = end_layer
         self.load_weight = load_weight
-        self.is_rpc = is_rpc
 
         self.operators_list = [ "LayerNorm + Attention",
                                 "Attention Output + residuel Connection",
@@ -58,8 +57,8 @@ class TransformerShard(nn.Module):
 
 
 class BertTransformerShard(TransformerShard):
-    def __init__(self, stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True, is_rpc=False):
-        super().__init__(stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight, is_rpc)
+    def __init__(self, stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
+        super().__init__(stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight)
         self.embeddings = None
 
         print(f">>>> Model name {model_name}")
@@ -269,8 +268,6 @@ class BertTransformerShard(TransformerShard):
 
     @torch.no_grad()
     def forward(self, x):
-        if self.is_rpc:
-            x = x.to_here()
         with self._lock:
             start = time.time()
             if self.is_first:
@@ -315,8 +312,8 @@ class BertTransformerShard(TransformerShard):
 
 
 class ViTTransformerShard(TransformerShard):
-    def __init__(self, stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True, is_rpc=False):
-        super().__init__(stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight, is_rpc)
+    def __init__(self, stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
+        super().__init__(stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight)
         self.embeddings = None
         self.layernorm = None
         self.classifier = None
@@ -539,8 +536,6 @@ class ViTTransformerShard(TransformerShard):
 
     @torch.no_grad()
     def forward(self, x):
-        if self.is_rpc:
-            x = x.to_here()
         with self._lock:
             logging.info(f"Start memory {self.process.memory_info().rss / 1000000} MB")
             start = time.time()
@@ -595,11 +590,22 @@ class ViTTransformerShard(TransformerShard):
 #             Stitch Shards into one Module             #
 #########################################################
 
+def forward_pre_hook_rpc(_module, x):
+    """Copy forward input data from the prior stage as needed."""
+    return tuple(_x.to_here() for _x in x)
+
+
 class DistRpcTransformer(nn.Module):
     """Parent class for distributed RPC transformers."""
     def __init__(self):
         super().__init__()
         self.rref_list = []
+
+    def _register_hooks(self):
+        """Register hooks."""
+        hook_futures = [rref.rpc_async().register_forward_pre_hook(forward_pre_hook_rpc)
+                        for rref in self.rref_list]
+        torch.futures.wait_all(hook_futures)
 
     def forward(self, xs, **kwargs):
         """Configure and run remote stages using RPC."""
@@ -624,8 +630,9 @@ class BertDistRpcTransformer(DistRpcTransformer):
             is_last = i == len(stage_ranks) - 1
             rref = rpc.remote(dst_rank, BertTransformerShard,
                               args=(i, model_name, model_file, is_first, is_last, partition[2*i],
-                                    partition[2*i+1], True, True))
+                                    partition[2*i+1], True))
             self.rref_list.append(rref)
+        self._register_hooks()
 
 
 class ViTDistRpcTransformer(DistRpcTransformer):
@@ -638,5 +645,6 @@ class ViTDistRpcTransformer(DistRpcTransformer):
             is_last = i == len(stage_ranks) - 1
             rref = rpc.remote(dst_rank, ViTTransformerShard,
                               args=(i, model_name, model_file, is_first, is_last, partition[2*i],
-                                    partition[2*i+1], True, True))
+                                    partition[2*i+1], True))
             self.rref_list.append(rref)
+        self._register_hooks()
