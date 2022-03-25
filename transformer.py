@@ -307,9 +307,6 @@ class BertTransformerShard(TransformerShard):
             return x
         return x, skip
 
-    def parameter_rrefs(self):
-        return [RRef(p) for p in self.parameters()]
-
 
 class ViTTransformerShard(TransformerShard):
     def __init__(self, stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight=True):
