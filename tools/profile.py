@@ -1,21 +1,18 @@
+import argparse
+import math
 import os
 import sys
-import gc
-import math
 import threading
-import argparse
 import time
-import torch
 import psutil
-from math import floor
+import torch
 import numpy as np
-import torch.nn as nn
-import torch.distributed.autograd as dist_autograd
-import torch.distributed.rpc as rpc
+from torch import nn
 from transformers import AutoConfig
+from transformers.models.vit.modeling_vit import ViTEmbeddings
 sys.path.append(os.path.join(sys.path[0], '..'))
 from edgepipe.models.transformers.vit import ViTTransformerShard
-from transformers.models.vit.modeling_vit import ViTEmbeddings,  ViTSelfAttention, ViTSelfOutput,ViTIntermediate, ViTOutput
+
 process = psutil.Process(os.getpid())
 operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
 class ProfileTransformer(ViTTransformerShard):
@@ -23,7 +20,7 @@ class ProfileTransformer(ViTTransformerShard):
         super().__init__(0, model_name, model_file, True, True, 1, 0, load_weight=True)
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
-        print(f">>>> Profile Model {model_name}")      
+        print(f">>>> Profile Model {model_name}")
         self.embeddings = None
         self.layernorm = None
         self.classifier = None
@@ -53,7 +50,6 @@ class ProfileTransformer(ViTTransformerShard):
         self.kernel_memory = [0]*(self.end_layer-self.start_layer+1)
         self._make_layer()
 
-    
     def _make_layer(self):
         ## first Shard
         self.embeddings = ViTEmbeddings(self.config)
@@ -66,7 +62,7 @@ class ProfileTransformer(ViTTransformerShard):
             print(f"loading layer {i}, memory {process.memory_info().rss / 1000000} MB")
             self.kernel_memory[i-self.start_layer] = process.memory_info().rss / 1000000
             print(self.kernel_memory)
-    
+
         ## last Shard
         num_label = self.config.num_labels
         self.layernorm = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
@@ -84,7 +80,6 @@ class ProfileTransformer(ViTTransformerShard):
             if self.record_kernel_3:
                 a,b,c=x.shape
                 self.transfer_data_shape.append(a*b*c)
-            
         elif kernel_id == 2:
             x = layer[0](x, skip)
             x += skip
@@ -97,7 +92,7 @@ class ProfileTransformer(ViTTransformerShard):
             x = layer[1](x)
             if self.record_kernel_3:
                 a,b,c=x.shape
-                self.transfer_data_shape.append(a*b*c)        
+                self.transfer_data_shape.append(a*b*c)
         else:
             x = layer[0](x, skip)
             skip = x
@@ -108,7 +103,6 @@ class ProfileTransformer(ViTTransformerShard):
         end_kernel = time.time()
         self.profile_time[i] += (end_kernel-start_kernel)
         return x, skip
-
 
     @torch.no_grad()
     def forward(self, data):
@@ -137,8 +131,11 @@ class ProfileTransformer(ViTTransformerShard):
 if __name__=="__main__":
     parser = argparse.ArgumentParser(description="Proile Model")
 
-    parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224", choices=["google/vit-base-patch16-224", 
-    "google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k"], help="the neural network model for loading")
+    parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224",
+                        choices=["google/vit-base-patch16-224",
+                                 "google/vit-large-patch16-224",
+                                 "google/vit-huge-patch14-224-in21k"],
+                        help="the neural network model for loading")
     parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
     parser.add_argument("-st", "--start-layer", default=1, type=int, help="start layer")
     parser.add_argument("-ed", "--end-layer", default=-1, type=int, help="end layer")
@@ -147,10 +144,9 @@ if __name__=="__main__":
     parser.add_argument("-s", "--save-result",  action="store_true", help="save the results")
     parser.add_argument("-a", "--append-result",  action="store_true", help="append the results")
     parser.add_argument("-c", "--cpu-name", default="unknown_cpu", help="cpu name for saving")
-    
 
     args = parser.parse_args()
-    batch_size = args.batch_size     
+    batch_size = args.batch_size
     model_name = args.model_name
     repeat_time  = args.repeat_time
     start_layer = args.start_layer
