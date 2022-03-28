@@ -13,13 +13,14 @@ import torch.nn as nn
 import torch.distributed.autograd as dist_autograd
 import torch.distributed.rpc as rpc
 from transformers import AutoConfig
-from transformer import TransformerShard
+sys.path.append(os.path.join(sys.path[0], '..'))
+from edgepipe.models.transformers.vit import ViTTransformerShard
 from transformers.models.vit.modeling_vit import ViTEmbeddings,  ViTSelfAttention, ViTSelfOutput,ViTIntermediate, ViTOutput
 process = psutil.Process(os.getpid())
 operators_list = ["LayerNorm + Attention", "Attention Output + residuel Connection", "LayerNorm + MLP-1", "MLP-2 + residuel Connection"]
-class ProfileTransformer(TransformerShard):
-    def __init__(self, model_name,  start_layer=1, end_layer=-1, repeat_time=10):
-        super(ProfileTransformer, self).__init__(0, model_name, True, True, 1, 0, load_weight=True)
+class ProfileTransformer(ViTTransformerShard):
+    def __init__(self, model_name, model_file, start_layer=1, end_layer=-1, repeat_time=10):
+        super().__init__(0, model_name, model_file, True, True, 1, 0, load_weight=True)
         self.model_name = model_name
         self.config = AutoConfig.from_pretrained(model_name)
         print(f">>>> Profile Model {model_name}")      
@@ -56,7 +57,7 @@ class ProfileTransformer(TransformerShard):
     def _make_layer(self):
         ## first Shard
         self.embeddings = ViTEmbeddings(self.config)
-        self.load_layer_weights(0, None, load_first = True, load_last=False, load_kernel = False, kernel_id=None)
+        self._load_layer_weights(0, None, load_first = True, load_last=False, load_kernel = False, kernel_id=None)
         for i in range(self.start_layer, self.end_layer+1):
             layer = self._build_kernel(i%4, math.ceil(i/4)-1, True)
             # layer = self.load_layer_weights(math.ceil(i/4)-1, layer, False, False, True, i%4)
@@ -72,7 +73,7 @@ class ProfileTransformer(TransformerShard):
         if self.model_name == 'google/vit-huge-patch14-224-in21k':
             num_label = 21843
         self.classifier = nn.Linear(self.config.hidden_size, num_label) if self.config.num_labels > 0 else nn.Identity()
-        self.load_layer_weights(0, None, load_first = False, load_last=True, load_kernel = False, kernel_id=None)
+        self._load_layer_weights(0, None, load_first = False, load_last=True, load_kernel = False, kernel_id=None)
 
     def forward_kernel(self, layer, x, skip, i):
         start_kernel = time.time()
@@ -138,6 +139,7 @@ if __name__=="__main__":
 
     parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224", choices=["google/vit-base-patch16-224", 
     "google/vit-large-patch16-224", "google/vit-huge-patch14-224-in21k"], help="the neural network model for loading")
+    parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
     parser.add_argument("-st", "--start-layer", default=1, type=int, help="start layer")
     parser.add_argument("-ed", "--end-layer", default=-1, type=int, help="end layer")
     parser.add_argument("-b", "--batch-size", default=8, type=int, help="batch size")
@@ -153,9 +155,19 @@ if __name__=="__main__":
     repeat_time  = args.repeat_time
     start_layer = args.start_layer
     end_layer = args.end_layer
+    model_files_default = {
+        'google/vit-base-patch16-224': 'ViT-B_16-224.npz',
+        'google/vit-large-patch16-224':'ViT-L_16-224.npz',
+        'google/vit-huge-patch14-224-in21k': 'ViT-H_14.npz',
+        'bert-base-uncased': 'BERT-B.npz',
+        'bert-large-uncased': 'BERT-L.npz',
+    }
+    model_file = args.model_file
+    if model_file is None:
+        model_file = model_files_default[model_name]
     print(f">>>> Start profiling: model name {model_name} \n>>>> repeat time {repeat_time} \n>>>> batch size {batch_size} \
     \n>>>> save file {args.save_result} \n>>>> append result is {args.append_result}")
-    model = ProfileTransformer(model_name, start_layer, end_layer, repeat_time)
+    model = ProfileTransformer(model_name, model_file, start_layer, end_layer, repeat_time)
     inputs = torch.randn(batch_size,3,224,224)
     process = psutil.Process(os.getpid())
     print(f"memory {process.memory_info().rss // 1000000} MB")
