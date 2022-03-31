@@ -9,9 +9,12 @@ import numpy as np
 from PIL import Image
 import requests
 import torch
-from transformers import BertTokenizer, ViTFeatureExtractor
-from edgepipe.comm.rpc.transformers import BertDistRpcTransformer, ViTDistRpcTransformer
+from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
+from edgepipe.comm.rpc.transformers import (
+    BertDistRpcTransformer, DeiTDistRpcTransformer, ViTDistRpcTransformer
+)
 from edgepipe.models.transformers.bert import BertTransformerShard
+from edgepipe.models.transformers.deit import DeiTTransformerShard
 from edgepipe.models.transformers.vit import ViTTransformerShard
 from pipeline import DistP2pPipelineStage, DistRpcPipeline
 
@@ -104,7 +107,10 @@ if __name__=="__main__":
                                  "google/vit-large-patch16-224",
                                  "google/vit-huge-patch14-224-in21k",
                                  "bert-base-uncased",
-                                 "bert-large-uncased"],
+                                 "bert-large-uncased",
+                                 "facebook/deit-base-distilled-patch16-224",
+                                 "facebook/deit-small-distilled-patch16-224",
+                                 "facebook/deit-tiny-distilled-patch16-224"],
                         help="the neural network model for loading")
     parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
     parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
@@ -142,13 +148,6 @@ if __name__=="__main__":
     num_batches = args.num_batches
     batch_size = args.batch_size
     num_worker_threads = args.worker_threads
-    ## random data
-    # img = torch.randn(3, 384, 384)
-    ## ground truth: Egyptian cat
-    url = 'http://images.cocodataset.org/val2017/000000039769.jpg'
-    image = Image.open(requests.get(url, stream=True).raw)
-    # image = Image.open('./images/panda.jpeg')
-    imgs = [image for i in range(batch_size)]
 
     # ***********************  End  **************************#
     world_size = args.worldsize
@@ -158,10 +157,13 @@ if __name__=="__main__":
 
     model_files_default = {
         'google/vit-base-patch16-224': 'ViT-B_16-224.npz',
-        'google/vit-large-patch16-224':'ViT-L_16-224.npz',
+        'google/vit-large-patch16-224': 'ViT-L_16-224.npz',
         'google/vit-huge-patch14-224-in21k': 'ViT-H_14.npz',
         'bert-base-uncased': 'BERT-B.npz',
         'bert-large-uncased': 'BERT-L.npz',
+        'facebook/deit-base-distilled-patch16-224': 'DeiT_B_distilled.npz',
+        'facebook/deit-small-distilled-patch16-224': 'DeiT_S_distilled.npz',
+        'facebook/deit-tiny-distilled-patch16-224': 'DeiT_T_distilled.npz',
     }
     model_file = args.model_file
     if model_file is None:
@@ -182,7 +184,18 @@ if __name__=="__main__":
         tokenizer = BertTokenizer.from_pretrained(model_name)
         inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
     else:
-        feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
+        if model_name in ['facebook/deit-base-distilled-patch16-224',
+                          'facebook/deit-small-distilled-patch16-224',
+                          'facebook/deit-tiny-distilled-patch16-224']:
+            feature_extractor = DeiTFeatureExtractor.from_pretrained(model_name)
+        else:
+            feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
+        ## random data
+        # image = torch.randn(3, 384, 384)
+        ## ground truth: Egyptian cat
+        URL = 'http://images.cocodataset.org/val2017/000000039769.jpg'
+        image = Image.open(requests.get(URL, stream=True).raw)
+        imgs = [image for i in range(batch_size)]
         inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
 
     if args.comm == 'p2p':
@@ -199,6 +212,11 @@ if __name__=="__main__":
             is_last = stage == len(stage_ranks) - 1
             if model_name in ['bert-base-uncased', 'bert-large-uncased']:
                 model = BertTransformerShard(stage, model_name, model_file, is_first, is_last,
+                                             partition[2*stage], partition[2*stage+1], True)
+            elif model_name in ['facebook/deit-base-distilled-patch16-224',
+                                'facebook/deit-small-distilled-patch16-224',
+                                'facebook/deit-tiny-distilled-patch16-224']:
+                model = DeiTTransformerShard(stage, model_name, model_file, is_first, is_last,
                                              partition[2*stage], partition[2*stage+1], True)
             else:
                 model = ViTTransformerShard(stage, model_name, model_file, is_first, is_last,
@@ -235,6 +253,10 @@ if __name__=="__main__":
                 # Create model shards on workers (requires distributed context to be initialized)
                 if model_name in ['bert-base-uncased', 'bert-large-uncased']:
                     model = BertDistRpcTransformer(model_name, model_file, stage_ranks, partition)
+                elif model_name in ['facebook/deit-base-distilled-patch16-224',
+                                    'facebook/deit-small-distilled-patch16-224',
+                                    'facebook/deit-tiny-distilled-patch16-224']:
+                    model = DeiTDistRpcTransformer(model_name, model_file, stage_ranks, partition)
                 else:
                     model = ViTDistRpcTransformer(model_name, model_file, stage_ranks, partition)
                 def drive_pipeline(split_size):
