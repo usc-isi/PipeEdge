@@ -6,8 +6,8 @@ from ...models.transformers.bert import BertTransformerShard
 from ...models.transformers.vit import ViTTransformerShard
 
 
-class BertDistRpcTransformer(DistRpcModule):
-    """BERT distributed RPC transformer."""
+class BertDistRpcModule(DistRpcModule):
+    """BERT distributed RPC module."""
 
     def __init__(self, model_name, model_file, stage_ranks, partition):
         super().__init__()
@@ -22,8 +22,8 @@ class BertDistRpcTransformer(DistRpcModule):
         self._register_hooks()
 
 
-class DeiTDistRpcTransformer(DistRpcModule):
-    """DeiT distributed RPC transformer."""
+class DeiTDistRpcModule(DistRpcModule):
+    """DeiT distributed RPC module."""
 
     def __init__(self, model_name, model_file, stage_ranks, partition):
         super().__init__()
@@ -37,8 +37,8 @@ class DeiTDistRpcTransformer(DistRpcModule):
         self._register_hooks()
 
 
-class ViTDistRpcTransformer(DistRpcModule):
-    """ViT distributed RPC transformer."""
+class ViTDistRpcModule(DistRpcModule):
+    """ViT distributed RPC module."""
 
     def __init__(self, model_name, model_file, stage_ranks, partition):
         super().__init__()
