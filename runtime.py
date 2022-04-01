@@ -101,7 +101,8 @@ if __name__=="__main__":
                         choices=model_cfg.get_model_names(),
                         help="the neural network model for loading")
     parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
-    parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
+    parser.add_argument("-pt", "--partition", type=str,
+                        help="comma-delimited partition method, e.g.: '1,48'; default: all layers in the model")
     parser.add_argument("-r", "--rank-order", type=str, default=None,
                         help="comma-delimited list of ranks in desired stage order; default: natural rank order until partitions are assigned")
     parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
@@ -126,8 +127,12 @@ if __name__=="__main__":
     #########################################################
     #                 Configuration for Network             #
     #########################################################
+    model_name = args.model_name
     # *****  Define the World Size and partition Method ******#
-    partition =   [int(i) for i in args.partition.split(',')]
+    if args.partition is None:
+        partition = [1, model_cfg.get_model_layers(model_name)]
+    else:
+        partition = [int(i) for i in args.partition.split(',')]
     if args.rank_order is None:
         # use natural rank order
         stage_ranks = list(range(len(partition) // 2))
@@ -141,7 +146,6 @@ if __name__=="__main__":
     world_size = args.worldsize
     rank=args.rank
     num_split = [int(i) for i in args.splits.split(',')]
-    model_name= args.model_name
 
     model_file = args.model_file
     if model_file is None:
