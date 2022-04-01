@@ -192,19 +192,21 @@ if __name__=="__main__":
         if stage is None:
             model = None
         else:
-            is_first = stage == 0
-            is_last = stage == len(stage_ranks) - 1
+            layer_start = partition[2*stage]
+            layer_end = partition[2*stage+1]
+            is_first = layer_start == 1
+            is_last = layer_end == model_cfg.get_model_layers(model_name)
             if model_name in ['bert-base-uncased', 'bert-large-uncased']:
                 model = BertTransformerShard(stage, model_name, model_file, is_first, is_last,
-                                             partition[2*stage], partition[2*stage+1], True)
+                                             layer_start, layer_end, True)
             elif model_name in ['facebook/deit-base-distilled-patch16-224',
                                 'facebook/deit-small-distilled-patch16-224',
                                 'facebook/deit-tiny-distilled-patch16-224']:
                 model = DeiTTransformerShard(stage, model_name, model_file, is_first, is_last,
-                                             partition[2*stage], partition[2*stage+1], True)
+                                             layer_start, layer_end, True)
             else:
                 model = ViTTransformerShard(stage, model_name, model_file, is_first, is_last,
-                                            partition[2*stage], partition[2*stage+1], True)
+                                            layer_start, layer_end, True)
         stop_event = threading.Event()
         CMD_STOP = 100
         def handle_cmd(cmd):
