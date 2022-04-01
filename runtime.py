@@ -16,6 +16,7 @@ from edgepipe.comm.rpc.transformers import (
 from edgepipe.models.transformers.bert import BertTransformerShard
 from edgepipe.models.transformers.deit import DeiTTransformerShard
 from edgepipe.models.transformers.vit import ViTTransformerShard
+import model_cfg
 from pipeline import DistP2pPipelineStage, DistRpcPipeline
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
@@ -103,14 +104,7 @@ if __name__=="__main__":
                         choices=["rpc", "p2p"],
                         help="the communication implementation")
     parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224",
-                        choices=["google/vit-base-patch16-224",
-                                 "google/vit-large-patch16-224",
-                                 "google/vit-huge-patch14-224-in21k",
-                                 "bert-base-uncased",
-                                 "bert-large-uncased",
-                                 "facebook/deit-base-distilled-patch16-224",
-                                 "facebook/deit-small-distilled-patch16-224",
-                                 "facebook/deit-tiny-distilled-patch16-224"],
+                        choices=model_cfg.get_model_names(),
                         help="the neural network model for loading")
     parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
     parser.add_argument("-pt", "--partition", default="1,48", help="the partition method")
@@ -155,19 +149,9 @@ if __name__=="__main__":
     num_split = [int(i) for i in args.splits.split(',')]
     model_name= args.model_name
 
-    model_files_default = {
-        'google/vit-base-patch16-224': 'ViT-B_16-224.npz',
-        'google/vit-large-patch16-224': 'ViT-L_16-224.npz',
-        'google/vit-huge-patch14-224-in21k': 'ViT-H_14.npz',
-        'bert-base-uncased': 'BERT-B.npz',
-        'bert-large-uncased': 'BERT-L.npz',
-        'facebook/deit-base-distilled-patch16-224': 'DeiT_B_distilled.npz',
-        'facebook/deit-small-distilled-patch16-224': 'DeiT_S_distilled.npz',
-        'facebook/deit-tiny-distilled-patch16-224': 'DeiT_T_distilled.npz',
-    }
     model_file = args.model_file
     if model_file is None:
-        model_file = model_files_default[model_name]
+        model_file = model_cfg.get_model_default_weights_file(model_name)
 
     print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
 
