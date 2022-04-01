@@ -1,5 +1,4 @@
 """ViT Transformers."""
-import gc
 import logging
 import math
 import os
@@ -254,7 +253,6 @@ class ViTTransformerShard(TransformerShard):
                 logging.info(f"Before {i}: {self.process.memory_info().rss / 1000000} MB")
                 x = layer(x)[0]
                 logging.info(f"After {i}: {self.process.memory_info().rss / 1000000} MB")
-                gc.collect()
                 skip = x
             logging.info(f"vit-layer memory {self.process.memory_info().rss / 1000000} MB")
 
