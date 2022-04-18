@@ -12,6 +12,7 @@ import torch
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 import model_cfg
 from pipeline import DistP2pPipelineStage, DistRpcPipeline
+from edgepipe.quantization.hook import forward_hook_quant_encode, forward_pre_hook_quant_decode
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log',level=logging.INFO)
@@ -192,6 +193,10 @@ if __name__=="__main__":
         else:
             model = model_cfg.module_shard_factory(model_name, model_file, partition[2*stage],
                                                    partition[2*stage+1], stage)
+        if stage != len(partition) / 2 - 1:
+            model.register_forward_hook(forward_hook_quant_encode)
+        if stage != 0:
+            model.register_forward_pre_hook(forward_pre_hook_quant_decode)
         stop_event = threading.Event()
         CMD_STOP = 100
         def handle_cmd(cmd):

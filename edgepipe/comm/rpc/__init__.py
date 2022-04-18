@@ -2,6 +2,7 @@
 import torch
 from torch import nn
 from torch.distributed.rpc import RRef
+from ...quantization.hook import forward_hook_quant_encode, forward_pre_hook_quant_decode
 
 
 def forward_pre_hook_rpc(_module, x):
@@ -21,6 +22,13 @@ class DistRpcModule(nn.Module):
         hook_futures = [rref.rpc_async().register_forward_pre_hook(forward_pre_hook_rpc)
                         for rref in self._rref_list]
         torch.futures.wait_all(hook_futures)
+        hook_encoder = [rref.rpc_async().register_forward_hook(forward_hook_quant_encode)
+                        for rref in self._rref_list[:-1]]
+        torch.futures.wait_all(hook_encoder)
+        hook_decoder = [rref.rpc_async().register_forward_pre_hook(forward_pre_hook_quant_decode)
+                        for rref in self._rref_list[1:]]
+        torch.futures.wait_all(hook_decoder)
+
 
     def forward(self, xs, **kwargs):
         """Configure and run remote stages using RPC."""
