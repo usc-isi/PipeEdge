@@ -33,17 +33,21 @@ class BertTransformerShard(TransformerShard):
         print(f">>>> Model name {model_name}")
         if self.load_weight:
             print(f">>>> Load weight file {self.weights_file_name}")
-        self._make_layer()
+            with np.load(self.weights_file_name) as weights:
+                self._make_layer(weights)
+        else:
+            self._make_layer(None)
+
         print(f"======= Finish Build BertTransformerShard{self.stage} ==========")
 
-    def _make_layer(self):
+    def _make_layer(self, weights):
         ## first Shard
         if self.is_first:
             self.embeddings = BertEmbeddings(self.config)
             self.embeddings.eval()
             print(">>>> Load embeddings layer for the first shard ")
             if self.load_weight:
-                self._load_layer_weights(0, None, load_first = True, load_last=False, load_kernel = False, kernel_id=None)
+                self._load_layer_weights(weights, 0, None, load_first = True, load_last=False, load_kernel = False, kernel_id=None)
                 print(">>>> Load weights for embeddings layer ")
 
         current_layer_idx = self.start_layer
@@ -53,7 +57,7 @@ class BertTransformerShard(TransformerShard):
             print(f">>>> For the first model part, load weight is {self.load_weight}:")
             for i in range(self.start_layer, min(self.end_layer, math.ceil(self.start_layer/4)*4)+1):
                 print(f"    Load the {i%4}-th operation ({self.operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
-                layer = self._build_kernel(i%4, math.ceil(i/4)-1, self.load_weight)
+                layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
                 layer.eval()
                 self.first_ops.append(layer)
             current_layer_idx = min(self.end_layer+1, math.ceil(self.start_layer/4)*4+1)
@@ -63,7 +67,7 @@ class BertTransformerShard(TransformerShard):
             with torch.no_grad():
                 layer = BertLayer(self.config)
             if self.load_weight:
-                layer = self._load_layer_weights(math.ceil(current_layer_idx/4)-1, layer)
+                layer = self._load_layer_weights(weights, math.ceil(current_layer_idx/4)-1, layer)
             layer.eval()
             self.vit_layers.append(layer)
             print(f">>>> Load the {math.ceil(current_layer_idx/4)-1}-th {self.model_name} Layer, load weight is {self.load_weight}")
@@ -74,9 +78,9 @@ class BertTransformerShard(TransformerShard):
             print(f">>>> For the last model part, load weight is {self.load_weight}:")
         for i in range(current_layer_idx, self.end_layer+1):
             print(f"    Load the {i%4}-th operation ({self.operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
-            layer = self._build_kernel(i%4, math.ceil(i/4)-1, self.load_weight)
+            layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
             if self.load_weight:
-                layer = self._load_layer_weights(math.ceil(i/4)-1, layer, False, False, True, i%4)
+                layer = self._load_layer_weights(weights, math.ceil(i/4)-1, layer, False, False, True, i%4)
             layer.eval()
             self.last_ops.append(layer)
 
@@ -85,7 +89,7 @@ class BertTransformerShard(TransformerShard):
             self.bertpooler = BertPooler(self.config)
             self.bertpooler.eval()
             if self.load_weight:
-                self._load_layer_weights(0, None, load_first = False, load_last=True, load_kernel = False, kernel_id=None)
+                self._load_layer_weights(weights, 0, None, load_first = False, load_last=True, load_kernel = False, kernel_id=None)
                 print(">>>> Load weights for layernorm and last shard")
 
 
@@ -94,7 +98,7 @@ class BertTransformerShard(TransformerShard):
         else:
             print(">>>> Do NOT load weights")
 
-    def _build_kernel(self, kernel_id, vit_layer_id, load_weight=True):
+    def _build_kernel(self, weights, kernel_id, vit_layer_id, load_weight=True):
         layers = nn.ModuleList()
         if kernel_id == 1:
             layers.append(BertSelfAttention(self.config))
@@ -105,11 +109,10 @@ class BertTransformerShard(TransformerShard):
         else:
             layers.append(BertOutput(self.config))
         if load_weight:
-            self._load_layer_weights(vit_layer_id, layers, False, False, load_weight, kernel_id)
+            self._load_layer_weights(weights, vit_layer_id, layers, False, False, load_weight, kernel_id)
         return layers
 
-    def _load_layer_weights(self, id, transformer_layer, load_first = False, load_last=False, load_kernel = False, kernel_id=None):
-        weights = np.load(self.weights_file_name)
+    def _load_layer_weights(self, weights, id, transformer_layer, load_first = False, load_last=False, load_kernel = False, kernel_id=None):
         ROOT = f"encoder.layer.{id}."
         ATTENTION_Q = "attention.self.query."
         ATTENTION_K = "attention.self.key."
