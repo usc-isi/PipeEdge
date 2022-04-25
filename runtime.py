@@ -16,6 +16,11 @@ from pipeline import DistP2pPipelineStage, DistRpcPipeline
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log',level=logging.INFO)
 
+## ground truth: Egyptian cat
+IMG_URL = 'http://images.cocodataset.org/val2017/000000039769.jpg'
+
+CMD_STOP = 100
+
 
 class ThreadSafeCounter():
     """Thread-safe counter."""
@@ -87,7 +92,8 @@ def profile_split_sizes(split_sizes, num_batches, batch_size, callback):
     logging.info(f"\nBest split size is {split_sizes[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
 
 
-if __name__=="__main__":
+def main():
+    """Main function."""
     #########################################################
     #                 Check Enviroment Settings             #
     #########################################################
@@ -175,9 +181,7 @@ if __name__=="__main__":
             feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
         ## random data
         # image = torch.randn(3, 384, 384)
-        ## ground truth: Egyptian cat
-        URL = 'http://images.cocodataset.org/val2017/000000039769.jpg'
-        image = Image.open(requests.get(URL, stream=True).raw)
+        image = Image.open(requests.get(IMG_URL, stream=True).raw)
         imgs = [image for i in range(batch_size)]
         inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
 
@@ -194,7 +198,6 @@ if __name__=="__main__":
             model = model_cfg.module_shard_factory(model_name, model_file, partition[2*stage],
                                                    partition[2*stage+1], stage)
         stop_event = threading.Event()
-        CMD_STOP = 100
         def handle_cmd(cmd):
             """Process received commands."""
             if cmd == CMD_STOP:
@@ -232,3 +235,7 @@ if __name__=="__main__":
 
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")
+
+
+if __name__=="__main__":
+    main()
