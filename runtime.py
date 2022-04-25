@@ -167,8 +167,8 @@ def main():
 
     tik = time.time()
     if model_name in ['bert-base-uncased', 'bert-large-uncased']:
-        bert_inputs = np.load("bert_input.npz")['input']
-        inputs_sentence = list(bert_inputs[0: batch_size])
+        with np.load("bert_input.npz") as bert_inputs:
+            inputs_sentence = list(bert_inputs['input'][0: batch_size])
         # print(len(inputs_sentence))
         tokenizer = BertTokenizer.from_pretrained(model_name)
         inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
