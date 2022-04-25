@@ -109,7 +109,7 @@ def main():
                         help="the neural network model for loading")
     parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
     parser.add_argument("-pt", "--partition", type=str,
-                        help="comma-delimited partition method, e.g.: '1,48'; default: all layers in the model")
+                        help="comma-delimited list of start/end layer pairs, e.g.: '1,48'; default: all layers in the model")
     parser.add_argument("-r", "--rank-order", type=str, default=None,
                         help="comma-delimited list of ranks in desired stage order; default: natural rank order until partitions are assigned")
     parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
@@ -135,14 +135,14 @@ def main():
     #                 Configuration for Network             #
     #########################################################
     model_name = args.model_name
-    # *****  Define the World Size and partition Method ******#
     if args.partition is None:
-        partition = [1, model_cfg.get_model_layers(model_name)]
+        stage_layers = [(1, model_cfg.get_model_layers(model_name))]
     else:
-        partition = [int(i) for i in args.partition.split(',')]
+        parts = [int(i) for i in args.partition.split(',')]
+        stage_layers = [(parts[i], parts[i+1]) for i in range(0, len(parts), 2)]
     if args.rank_order is None:
         # use natural rank order
-        stage_ranks = list(range(len(partition) // 2))
+        stage_ranks = list(range(len(stage_layers)))
     else:
         stage_ranks = [int(i) for i in args.rank_order.split(',')]
     num_batches = args.num_batches
@@ -158,7 +158,8 @@ def main():
     if model_file is None:
         model_file = model_cfg.get_model_default_weights_file(model_name)
 
-    print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split}, \n Split method is {partition}, GLOO Threads is {num_worker_threads}")
+    print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split},")
+    print(f"Split method is {stage_layers}, GLOO Threads is {num_worker_threads}")
 
     os.environ['MASTER_ADDR'] = args.addr # MASTER_ADDR
     os.environ['MASTER_PORT'] = args.port # MASTER_PORT
@@ -195,8 +196,8 @@ def main():
         if stage is None:
             model = None
         else:
-            model = model_cfg.module_shard_factory(model_name, model_file, partition[2*stage],
-                                                   partition[2*stage+1], stage)
+            model = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage][0],
+                                                   stage_layers[stage][1], stage)
         stop_event = threading.Event()
         def handle_cmd(cmd):
             """Process received commands."""
@@ -226,7 +227,7 @@ def main():
             if rank == stage_ranks[0]:
                 print("Run mastering \n")
                 # Create model shards on workers (requires distributed context to be initialized)
-                model = model_cfg.dist_rpc_module_factory(model_name, model_file, stage_ranks, partition)
+                model = model_cfg.dist_rpc_module_factory(model_name, model_file, stage_ranks, stage_layers)
                 def drive_pipeline(split_size):
                     """Feed the pipeline."""
                     # this call is synchronous - it won't return until it has the results

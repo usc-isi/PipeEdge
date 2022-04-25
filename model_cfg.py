@@ -59,8 +59,8 @@ def module_shard_factory(model_name, model_file, layer_start, layer_end, stage):
     module = _MODEL_CONFIGS[model_name]['shard_module']
     return module(stage, model_name, model_file, is_first, is_last, layer_start, layer_end, True)
 
-def dist_rpc_module_factory(model_name, model_file, stage_ranks, partition):
+def dist_rpc_module_factory(model_name, model_file, stage_ranks, stage_layers):
     """Get a RPC instance."""
     # This works b/c all dist RPC implementations have the same constructor interface
     module = _MODEL_CONFIGS[model_name]['rpc_module']
-    return module(model_name, model_file, stage_ranks, partition)
+    return module(model_name, model_file, stage_ranks, stage_layers)
