@@ -91,7 +91,8 @@ if __name__=="__main__":
     #########################################################
     #                 Check Enviroment Settings             #
     #########################################################
-    parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime")
+    parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime",
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("rank", type=int, help="the rank for the current node")
     parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
     parser.add_argument("-c", "--comm", type=str, default="rpc",
