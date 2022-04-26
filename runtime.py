@@ -212,7 +212,7 @@ def main():
     tik = time.time()
     if args.comm == 'p2p':
         stop_event = threading.Event()
-        def handle_cmd(cmd):
+        def handle_cmd(cmd, _tensors):
             """Process received commands."""
             if cmd == CMD_STOP:
                 print('handle_cmd: stop')

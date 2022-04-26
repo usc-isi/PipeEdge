@@ -44,15 +44,17 @@ class ConditionQueue(queue.Queue):
         self.condition = threading.Condition()
 
 
-def _send_tensor(tensor, dst, tag_base):
+def _send_tensor(tensor, dst, tag_base, fn_send=dist.send):
     # NOTE: could optimize by packing dtype and shape length into one message
     tensor_dtype = torch.tensor(TORCH_TYPES_ENUM[tensor.dtype], dtype=torch.int)
     tensor_shape_len = torch.tensor(len(tensor.shape), dtype=torch.int)
     tensor_shape = torch.tensor(tensor.shape, dtype=torch.int)
-    dist.send(tensor=tensor_dtype, dst=dst, tag=tag_base+TAG_TENSOR_DTYPE)
-    dist.send(tensor=tensor_shape_len, dst=dst, tag=tag_base+TAG_TENSOR_SHAPE_LEN)
-    dist.send(tensor=tensor_shape, dst=dst, tag=tag_base+TAG_TENSOR_SHAPE)
-    dist.send(tensor=tensor, dst=dst, tag=tag_base+TAG_TENSOR)
+    results = []
+    results.append(fn_send(tensor=tensor_dtype, dst=dst, tag=tag_base+TAG_TENSOR_DTYPE))
+    results.append(fn_send(tensor=tensor_shape_len, dst=dst, tag=tag_base+TAG_TENSOR_SHAPE_LEN))
+    results.append(fn_send(tensor=tensor_shape, dst=dst, tag=tag_base+TAG_TENSOR_SHAPE))
+    results.append(fn_send(tensor=tensor, dst=dst, tag=tag_base+TAG_TENSOR))
+    return results
 
 
 def _recv_tensor(src, tag_base):
@@ -206,7 +208,8 @@ class CommandThread(threading.Thread):
     def run(self):
         """Listen for commands."""
         while True:
-            tensor_cmd = torch.zeros(1, dtype=torch.int)
+            # contains (1) CMD enumeration and (2) an optional tensor count
+            tensor_cmd = torch.zeros(2, dtype=torch.int)
             ircv_req = dist.irecv(tensor=tensor_cmd, tag=TAG_BASE_CMD)
             ircv_req_t = DistRequestWaitDaemon(ircv_req)
             ircv_req_t.start()
@@ -215,7 +218,15 @@ class CommandThread(threading.Thread):
                     return
                 # TODO: we're basically spinning...
                 time.sleep(0.1)
-            self._callback(int(tensor_cmd))
+            cmd = int(tensor_cmd[0])
+            _tensor_count = int(tensor_cmd[1])
+            tensors = ()
+            for _ in range(_tensor_count):
+                # it would be nice if we could restrict src to the prior request's src, but the
+                # ircv_req "distributed request object" API doesn't document a src property to use
+                tensor = _recv_tensor(None, TAG_BASE_CMD)
+                tensors += (tensor,)
+            self._callback(cmd, tensors)
 
 
 def init(rank, world_size):
@@ -226,12 +237,18 @@ def shutdown():
     """Shutdown p2p."""
     dist.destroy_process_group()
 
-def cmd_broadcast(cmd):
+def cmd_broadcast(cmd, tensors=None):
     """Broadcast a command."""
-    tensor_cmd = torch.tensor(cmd, dtype=torch.int)
+    if tensors is None:
+        tensors = ()
+    elif isinstance(tensors, torch.Tensor):
+        tensors = (tensors,)
+    tensor_cmd = torch.tensor([cmd, len(tensors)], dtype=torch.int)
     reqs = []
     for dst in range(dist.get_world_size()):
         if dst != dist.get_rank():
             reqs.append(dist.isend(tensor_cmd, dst=dst, tag=TAG_BASE_CMD))
+            for tensor in tensors:
+                reqs += _send_tensor(tensor, dst, TAG_BASE_CMD, fn_send=dist.isend)
     for req in reqs:
         req.wait()

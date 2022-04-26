@@ -75,10 +75,10 @@ class DistP2pContext():
     def __exit__(self, *args):
         self.shutdown()
 
-    def cmd_broadcast(self, cmd):
+    def cmd_broadcast(self, cmd, tensors=None):
         """Broadcast a command."""
         assert self._initialized
-        p2p.cmd_broadcast(cmd)
+        p2p.cmd_broadcast(cmd, tensors=tensors)
 
 
 class DistP2pPipelineStage():
