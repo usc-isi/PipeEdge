@@ -210,7 +210,6 @@ def main():
     print(f"Split method is {stage_layers}, GLOO Threads is {num_worker_threads}")
 
     tik = time.time()
-    inputs = load_inputs(model_name, batch_size)
     if args.comm == 'p2p':
         # Create model shard locally (doesn't require distributed context to be initialized)
         try:
@@ -234,6 +233,7 @@ def main():
         # Initialize the distributed peer-to-peer context
         with DistP2pPipelineStage(world_size, rank, stage_ranks, stage, model, handle_results, handle_cmd) as stage_ctx:
             if stage == 0:
+                inputs = load_inputs(model_name, batch_size)
                 def drive_pipeline(split_size):
                     """Feed the pipeline."""
                     # this call is asynchronous - wait for results to get end-to-end timings
@@ -250,6 +250,7 @@ def main():
         # Initialize the distributed RPC context
         with DistRpcPipeline(world_size, rank, num_worker_threads) as pipeline:
             if rank == stage_ranks[0]:
+                inputs = load_inputs(model_name, batch_size)
                 print("Run mastering \n")
                 # Create model shards on workers (requires distributed context to be initialized)
                 model = model_cfg.dist_rpc_module_factory(model_name, model_file, stage_ranks, stage_layers)
