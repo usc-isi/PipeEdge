@@ -92,6 +92,35 @@ def profile_split_sizes(split_sizes, num_batches, batch_size, callback):
     logging.info(f"\nBest split size is {split_sizes[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
 
 
+def get_pipeline_sched(world_size, partition, rank_order, model_name):
+    """Get the pipeline schedule."""
+    if partition:
+        # User specified the stage layers
+        print("Scheduling: using user-defined partitioning")
+        parts = [int(i) for i in partition.split(',')]
+        stage_layers = [(parts[i], parts[i+1]) for i in range(0, len(parts), 2)]
+        if rank_order:
+            # User specified the stage ranks
+            print("Scheduling: using user-defined rank ordering")
+            stage_ranks = [int(i) for i in rank_order.split(',')]
+        else:
+            # Use natural rank order
+            print("Scheduling: using natural rank ordering")
+            stage_ranks = list(range(len(stage_layers)))
+    elif rank_order:
+        raise RuntimeError("Must specify partition with rank stage ordering")
+    elif world_size <= 1:
+        # Degenerate case: everything runs locally
+        print("Scheduling: single-node execution (degenerate case)")
+        stage_layers = [(1, model_cfg.get_model_layers(model_name))]
+        stage_ranks = [0]
+    else:
+        raise RuntimeError("Automated distributed scheduling not implemented yet")
+    print(f"Scheduling: stage-to-layer mapping: {stage_layers}")
+    print(f"Scheduling: stage-to-rank mapping: {stage_ranks}")
+    return stage_layers, stage_ranks
+
+
 def main():
     """Main function."""
     #########################################################
@@ -131,40 +160,32 @@ def main():
     torch.set_grad_enabled(False)
     print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
     logging.info(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
+
     #########################################################
     #                 Configuration for Network             #
     #########################################################
-    model_name = args.model_name
-    if args.partition is None:
-        stage_layers = [(1, model_cfg.get_model_layers(model_name))]
-    else:
-        parts = [int(i) for i in args.partition.split(',')]
-        stage_layers = [(parts[i], parts[i+1]) for i in range(0, len(parts), 2)]
-    if args.rank_order is None:
-        # use natural rank order
-        stage_ranks = list(range(len(stage_layers)))
-    else:
-        stage_ranks = [int(i) for i in args.rank_order.split(',')]
-    num_batches = args.num_batches
-    batch_size = args.batch_size
-    num_worker_threads = args.worker_threads
-
-    # ***********************  End  **************************#
     world_size = args.worldsize
-    rank=args.rank
-    num_split = [int(i) for i in args.splits.split(',')]
-
-    model_file = args.model_file
-    if model_file is None:
-        model_file = model_cfg.get_model_default_weights_file(model_name)
-
-    print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split},")
-    print(f"Split method is {stage_layers}, GLOO Threads is {num_worker_threads}")
-
+    rank = args.rank
     os.environ['MASTER_ADDR'] = args.addr # MASTER_ADDR
     os.environ['MASTER_PORT'] = args.port # MASTER_PORT
     os.environ["TP_SOCKET_IFNAME"] = args.socket_ifname # SOCKET_IFNAME
     os.environ["GLOO_SOCKET_IFNAME"] = args.socket_ifname # SOCKET_IFNAME
+    num_worker_threads = args.worker_threads
+    # ***********************  End  **************************#
+
+    model_name = args.model_name
+    model_file = args.model_file
+    if model_file is None:
+        model_file = model_cfg.get_model_default_weights_file(model_name)
+    batch_size = args.batch_size
+    num_batches = args.num_batches
+    num_split = [int(i) for i in args.splits.split(',')]
+
+    stage_layers, stage_ranks = get_pipeline_sched(world_size, args.partition, args.rank_order,
+                                                   model_name)
+
+    print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split},")
+    print(f"Split method is {stage_layers}, GLOO Threads is {num_worker_threads}")
 
     tik = time.time()
     if model_name in ['bert-base-uncased', 'bert-large-uncased']:
