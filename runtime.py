@@ -3,6 +3,7 @@ import argparse
 import gc
 import logging
 import os
+import queue
 import threading
 import time
 import numpy as np
@@ -19,7 +20,8 @@ logging.basicConfig(filename='runtime.log',level=logging.INFO)
 ## ground truth: Egyptian cat
 IMG_URL = 'http://images.cocodataset.org/val2017/000000039769.jpg'
 
-CMD_STOP = 100
+CMD_STOP = 0
+CMD_SCHED = 1
 
 
 class ThreadSafeCounter():
@@ -203,24 +205,43 @@ def main():
     num_batches = args.num_batches
     num_split = [int(i) for i in args.splits.split(',')]
 
-    stage_layers, stage_ranks = get_pipeline_sched(world_size, args.partition, args.rank_order,
-                                                   model_name)
-
-    print(f"Model name is {model_name}, Batch size is {batch_size}, Split size is: {num_split},")
-    print(f"Split method is {stage_layers}, GLOO Threads is {num_worker_threads}")
+    # The master rank computes schedule, then:
+    # (1) with comm='p2p': distributes it, then each stage initializes their own stage context
+    # (2) with comm='rpc': the rank assigned to stage 0 instantiates the pipeline
+    if rank == 0:
+        stage_layers, stage_ranks = get_pipeline_sched(world_size, args.partition, args.rank_order,
+                                                       model_name)
+        print(f"Stage layers: {stage_layers}")
+        print(f"Stage ranks: {stage_ranks}")
 
     tik = time.time()
     if args.comm == 'p2p':
         stop_event = threading.Event()
-        def handle_cmd(cmd, _tensors):
+        sched_q = queue.Queue()
+        def handle_cmd(cmd, tensors):
             """Process received commands."""
             if cmd == CMD_STOP:
                 print('handle_cmd: stop')
                 stop_event.set()
+            elif cmd == CMD_SCHED:
+                print('handle_cmd: sched')
+                assert isinstance(tensors, tuple)
+                assert len(tensors) == 2 # stage_layers, stage_ranks
+                sched_q.put((tensors[0].tolist(), tensors[1].tolist()))
             else:
                 print(f'handle_cmd: Unknown command: {cmd}')
         # Initialize the distributed P2P context
         with DistP2pContext(world_size, rank, handle_cmd) as dist_ctx:
+            # Send or receive the schedule
+            if rank == 0:
+                print("Broadcasting schedule")
+                dist_ctx.cmd_broadcast(CMD_SCHED,
+                                       (torch.tensor(stage_layers), torch.tensor(stage_ranks)))
+            else:
+                print("Waiting for schedule")
+                stage_layers, stage_ranks = sched_q.get()
+                print(f"Stage layers: {stage_layers}")
+                print(f"Stage ranks: {stage_ranks}")
             # Create model shard locally
             try:
                 stage = stage_ranks.index(rank)
@@ -250,6 +271,7 @@ def main():
                     stop_event.wait()
     else:
         # Initialize the distributed RPC context
+        # print(f"GLOO Threads: {num_worker_threads}")
         with DistRpcPipeline(world_size, rank, num_worker_threads) as pipeline:
             if rank == stage_ranks[0]:
                 inputs = load_inputs(model_name, batch_size)
