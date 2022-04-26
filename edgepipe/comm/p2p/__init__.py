@@ -7,12 +7,16 @@ import torch
 import torch.distributed as dist
 from .util import DistRequestWaitDaemon
 
+# Base tag values
+TAG_BASE_DATA = 0
+TAG_BASE_CMD = 10
+
+# Offsets which are added to base values above
 TAG_TENSOR_COUNT = 0
 TAG_TENSOR_DTYPE = 1
 TAG_TENSOR_SHAPE_LEN = 2
 TAG_TENSOR_SHAPE = 3
 TAG_TENSOR = 4
-TAG_CMD = 10
 
 # Ordered set of torch types: https://pytorch.org/docs/stable/tensor_attributes.html
 TORCH_TYPES = [ torch.float32,
@@ -38,6 +42,32 @@ class ConditionQueue(queue.Queue):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.condition = threading.Condition()
+
+
+def _send_tensor(tensor, dst, tag_base):
+    # NOTE: could optimize by packing dtype and shape length into one message
+    tensor_dtype = torch.tensor(TORCH_TYPES_ENUM[tensor.dtype], dtype=torch.int)
+    tensor_shape_len = torch.tensor(len(tensor.shape), dtype=torch.int)
+    tensor_shape = torch.tensor(tensor.shape, dtype=torch.int)
+    dist.send(tensor=tensor_dtype, dst=dst, tag=tag_base+TAG_TENSOR_DTYPE)
+    dist.send(tensor=tensor_shape_len, dst=dst, tag=tag_base+TAG_TENSOR_SHAPE_LEN)
+    dist.send(tensor=tensor_shape, dst=dst, tag=tag_base+TAG_TENSOR_SHAPE)
+    dist.send(tensor=tensor, dst=dst, tag=tag_base+TAG_TENSOR)
+
+
+def _recv_tensor(src, tag_base):
+    tensor_dtype = torch.zeros(1, dtype=torch.int)
+    dist.recv(tensor=tensor_dtype, src=src, tag=tag_base+TAG_TENSOR_DTYPE)
+    _tensor_dtype = TORCH_TYPES[int(tensor_dtype)]
+    tensor_shape_len = torch.zeros(1, dtype=torch.int)
+    dist.recv(tensor=tensor_shape_len, src=src, tag=tag_base+TAG_TENSOR_SHAPE_LEN)
+    _tensor_shape_len = int(tensor_shape_len)
+    tensor_shape = torch.zeros(_tensor_shape_len, dtype=torch.int)
+    dist.recv(tensor=tensor_shape, src=src, tag=tag_base+TAG_TENSOR_SHAPE)
+    _tensor_shape = [int(x) for x in tensor_shape] # list(map(lambda x: int(x), tensor_shape))
+    tensor = torch.zeros(_tensor_shape, dtype=_tensor_dtype)
+    dist.recv(tensor=tensor, src=src, tag=tag_base+TAG_TENSOR)
+    return tensor
 
 
 class TensorSendThread(threading.Thread):
@@ -73,17 +103,10 @@ class TensorSendThread(threading.Thread):
             assert isinstance(tensors[0], torch.Tensor)
             _tensor_count = len(tensors)
             tensor_count = torch.tensor(_tensor_count, dtype=torch.int)
-            dist.send(tensor=tensor_count, dst=self._dst_rank, tag=TAG_TENSOR_COUNT)
+            dist.send(tensor=tensor_count, dst=self._dst_rank, tag=TAG_BASE_DATA+TAG_TENSOR_COUNT)
             # NOTE: could optimize by only sending dtype once (it's the same for all tensors)
             for tensor in tensors:
-                # NOTE: could optimize by packing dtype and shape length into one message
-                tensor_dtype = torch.tensor(TORCH_TYPES_ENUM[tensor.dtype], dtype=torch.int)
-                tensor_shape_len = torch.tensor(len(tensor.shape), dtype=torch.int)
-                tensor_shape = torch.tensor(tensor.shape, dtype=torch.int)
-                dist.send(tensor=tensor_dtype, dst=self._dst_rank, tag=TAG_TENSOR_DTYPE)
-                dist.send(tensor=tensor_shape_len, dst=self._dst_rank, tag=TAG_TENSOR_SHAPE_LEN)
-                dist.send(tensor=tensor_shape, dst=self._dst_rank, tag=TAG_TENSOR_SHAPE)
-                dist.send(tensor=tensor, dst=self._dst_rank, tag=TAG_TENSOR)
+                _send_tensor(tensor, self._dst_rank, TAG_BASE_DATA)
 
 
 class TensorRecvThread(threading.Thread):
@@ -103,7 +126,7 @@ class TensorRecvThread(threading.Thread):
         """Receive tensors and enqueue them."""
         while True:
             tensor_count = torch.zeros(1, dtype=torch.int)
-            ircv_req = dist.irecv(tensor=tensor_count, src=self._src_rank, tag=TAG_TENSOR_COUNT)
+            ircv_req = dist.irecv(tensor=tensor_count, src=self._src_rank, tag=TAG_BASE_DATA+TAG_TENSOR_COUNT)
             ircv_req_t = DistRequestWaitDaemon(ircv_req)
             ircv_req_t.start()
             while ircv_req_t.is_alive():
@@ -115,17 +138,7 @@ class TensorRecvThread(threading.Thread):
             assert _tensor_count > 0
             tensors = ()
             for _ in range(_tensor_count):
-                tensor_dtype = torch.zeros(1, dtype=torch.int)
-                dist.recv(tensor=tensor_dtype, src=self._src_rank, tag=TAG_TENSOR_DTYPE)
-                _tensor_dtype = TORCH_TYPES[int(tensor_dtype)]
-                tensor_shape_len = torch.zeros(1, dtype=torch.int)
-                dist.recv(tensor=tensor_shape_len, src=self._src_rank, tag=TAG_TENSOR_SHAPE_LEN)
-                _tensor_shape_len = int(tensor_shape_len)
-                tensor_shape = torch.zeros(_tensor_shape_len, dtype=torch.int)
-                dist.recv(tensor=tensor_shape, src=self._src_rank, tag=TAG_TENSOR_SHAPE)
-                _tensor_shape = [int(x) for x in tensor_shape] # list(map(lambda x: int(x), tensor_shape))
-                tensor = torch.zeros(_tensor_shape, dtype=_tensor_dtype)
-                dist.recv(tensor=tensor, src=self._src_rank, tag=TAG_TENSOR)
+                tensor = _recv_tensor(self._src_rank, TAG_BASE_DATA)
                 tensors += (tensor,)
             if _tensor_count == 1:
                 # At this point, we don't know whether the original data type was a Tensor or Tuple[Tensor] w/ len=1.
@@ -194,7 +207,7 @@ class CommandThread(threading.Thread):
         """Listen for commands."""
         while True:
             tensor_cmd = torch.zeros(1, dtype=torch.int)
-            ircv_req = dist.irecv(tensor=tensor_cmd, tag=TAG_CMD)
+            ircv_req = dist.irecv(tensor=tensor_cmd, tag=TAG_BASE_CMD)
             ircv_req_t = DistRequestWaitDaemon(ircv_req)
             ircv_req_t.start()
             while ircv_req_t.is_alive():
@@ -219,6 +232,6 @@ def cmd_broadcast(cmd):
     reqs = []
     for dst in range(dist.get_world_size()):
         if dst != dist.get_rank():
-            reqs.append(dist.isend(tensor_cmd, dst=dst, tag=TAG_CMD))
+            reqs.append(dist.isend(tensor_cmd, dst=dst, tag=TAG_BASE_CMD))
     for req in reqs:
         req.wait()
