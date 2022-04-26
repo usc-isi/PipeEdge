@@ -121,6 +121,28 @@ def get_pipeline_sched(world_size, partition, rank_order, model_name):
     return stage_layers, stage_ranks
 
 
+def load_inputs(model_name, batch_size):
+    """Load inputs based on model."""
+    if model_name in ['bert-base-uncased', 'bert-large-uncased']:
+        with np.load("bert_input.npz") as bert_inputs:
+            inputs_sentence = list(bert_inputs['input'][0: batch_size])
+        tokenizer = BertTokenizer.from_pretrained(model_name)
+        inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
+    else:
+        if model_name in ['facebook/deit-base-distilled-patch16-224',
+                          'facebook/deit-small-distilled-patch16-224',
+                          'facebook/deit-tiny-distilled-patch16-224']:
+            feature_extractor = DeiTFeatureExtractor.from_pretrained(model_name)
+        else:
+            feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
+        ## random data
+        # image = torch.randn(3, 384, 384)
+        image = Image.open(requests.get(IMG_URL, stream=True).raw)
+        imgs = [image for i in range(batch_size)]
+        inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
+    return inputs
+
+
 def main():
     """Main function."""
     #########################################################
@@ -188,25 +210,7 @@ def main():
     print(f"Split method is {stage_layers}, GLOO Threads is {num_worker_threads}")
 
     tik = time.time()
-    if model_name in ['bert-base-uncased', 'bert-large-uncased']:
-        with np.load("bert_input.npz") as bert_inputs:
-            inputs_sentence = list(bert_inputs['input'][0: batch_size])
-        # print(len(inputs_sentence))
-        tokenizer = BertTokenizer.from_pretrained(model_name)
-        inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
-    else:
-        if model_name in ['facebook/deit-base-distilled-patch16-224',
-                          'facebook/deit-small-distilled-patch16-224',
-                          'facebook/deit-tiny-distilled-patch16-224']:
-            feature_extractor = DeiTFeatureExtractor.from_pretrained(model_name)
-        else:
-            feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
-        ## random data
-        # image = torch.randn(3, 384, 384)
-        image = Image.open(requests.get(IMG_URL, stream=True).raw)
-        imgs = [image for i in range(batch_size)]
-        inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
-
+    inputs = load_inputs(model_name, batch_size)
     if args.comm == 'p2p':
         # Create model shard locally (doesn't require distributed context to be initialized)
         try:
