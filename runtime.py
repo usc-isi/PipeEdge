@@ -11,7 +11,7 @@ import requests
 import torch
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 import model_cfg
-from pipeline import DistP2pPipelineStage, DistRpcPipeline
+from pipeline import DistP2pContext, DistP2pPipelineStage, DistRpcPipeline
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log',level=logging.INFO)
@@ -211,17 +211,6 @@ def main():
 
     tik = time.time()
     if args.comm == 'p2p':
-        # Create model shard locally (doesn't require distributed context to be initialized)
-        try:
-            stage = stage_ranks.index(rank)
-        except ValueError:
-            # we're not assigned a stage at this time
-            stage = None
-        if stage is None:
-            model = None
-        else:
-            model = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage][0],
-                                                   stage_layers[stage][1], stage)
         stop_event = threading.Event()
         def handle_cmd(cmd):
             """Process received commands."""
@@ -230,22 +219,35 @@ def main():
                 stop_event.set()
             else:
                 print(f'handle_cmd: Unknown command: {cmd}')
-        # Initialize the distributed peer-to-peer context
-        with DistP2pPipelineStage(world_size, rank, stage_ranks, stage, model, handle_results, handle_cmd) as stage_ctx:
-            if stage == 0:
-                inputs = load_inputs(model_name, batch_size)
-                def drive_pipeline(split_size):
-                    """Feed the pipeline."""
-                    # this call is asynchronous - wait for results to get end-to-end timings
-                    start_count = results_counter.value
-                    stage_ctx.enqueue_batch(inputs, split_size)
-                    results_counter.wait_gte(start_count + len(inputs))
-                profile_split_sizes(num_split, num_batches, batch_size, drive_pipeline)
-                # will set stop_event on all other ranks
-                stage_ctx.cmd_broadcast(CMD_STOP)
-                stop_event.set()
+        # Initialize the distributed P2P context
+        with DistP2pContext(world_size, rank, handle_cmd) as dist_ctx:
+            # Create model shard locally
+            try:
+                stage = stage_ranks.index(rank)
+            except ValueError:
+                # we're not assigned a stage at this time
+                stage = None
+            if stage is None:
+                model = None
             else:
-                stop_event.wait()
+                model = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage][0],
+                                                       stage_layers[stage][1], stage)
+            # Initialize the stage context
+            with DistP2pPipelineStage(stage_ranks, stage, model, handle_results) as stage_ctx:
+                if stage == 0:
+                    inputs = load_inputs(model_name, batch_size)
+                    def drive_pipeline(split_size):
+                        """Feed the pipeline."""
+                        # this call is asynchronous - wait for results to get end-to-end timings
+                        start_count = results_counter.value
+                        stage_ctx.enqueue_batch(inputs, split_size)
+                        results_counter.wait_gte(start_count + len(inputs))
+                    profile_split_sizes(num_split, num_batches, batch_size, drive_pipeline)
+                    # will set stop_event on all other ranks
+                    dist_ctx.cmd_broadcast(CMD_STOP)
+                    stop_event.set()
+                else:
+                    stop_event.wait()
     else:
         # Initialize the distributed RPC context
         with DistRpcPipeline(world_size, rank, num_worker_threads) as pipeline:

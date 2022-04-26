@@ -44,17 +44,51 @@ class DistRpcPipeline():
         results_cb(outputs)
 
 
-class DistP2pPipelineStage():
-    """The singleton distributed peer-to-peer pipeline stage context manager."""
+class DistP2pContext():
+    """The singleton distributed P2P context manager."""
 
-    def __init__(self, world_size, rank, stage_ranks, stage, work_cb, results_cb, cmd_cb):
+    def __init__(self, world_size, rank, cmd_cb):
         self._world_size = world_size
         self._rank = rank
+        self._initialized = False
+        self._thread_cmd = p2p.CommandThread(cmd_cb)
+
+    def init(self):
+        """Initialize the distributed context and threads."""
+        assert not self._initialized
+        self._initialized = True
+        p2p.init(self._rank, self._world_size)
+        self._thread_cmd.start()
+
+    def shutdown(self):
+        """Shutdown threads and the distributed context."""
+        assert self._initialized
+        self._initialized = False
+        self._thread_cmd.stop()
+        self._thread_cmd.join()
+        p2p.shutdown()
+
+    def __enter__(self):
+        self.init()
+        return self
+
+    def __exit__(self, *args):
+        self.shutdown()
+
+    def cmd_broadcast(self, cmd):
+        """Broadcast a command."""
+        assert self._initialized
+        p2p.cmd_broadcast(cmd)
+
+
+class DistP2pPipelineStage():
+    """The singleton distributed P2P pipeline stage context manager."""
+
+    def __init__(self, stage_ranks, stage, work_cb, results_cb):
         self._stage = stage
         self._initialized = False
         self._queues = {}
         self._threads = {}
-        self._threads['cmd'] = p2p.CommandThread(cmd_cb)
         if self._stage is not None:
             self._create_stage(stage_ranks, work_cb, results_cb)
 
@@ -91,7 +125,6 @@ class DistP2pPipelineStage():
         """Initialize the distributed context and threads."""
         assert not self._initialized
         self._initialized = True
-        p2p.init(self._rank, self._world_size)
         for thr in self._threads.values():
             thr.start()
 
@@ -102,7 +135,6 @@ class DistP2pPipelineStage():
         for thr in self._threads.values():
             thr.stop()
             thr.join()
-        p2p.shutdown()
 
     def __enter__(self):
         self.init()
@@ -122,8 +154,3 @@ class DistP2pPipelineStage():
                     queue_in.condition.wait()
                 queue_in.put(input_chunk)
                 queue_in.condition.notify_all()
-
-    def cmd_broadcast(self, cmd):
-        """Broadcast a command."""
-        assert self._initialized
-        p2p.cmd_broadcast(cmd)
