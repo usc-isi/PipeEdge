@@ -11,6 +11,7 @@ from PIL import Image
 import requests
 import torch
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
+from edgepipe.sched.scheduler import sched_pipeline
 import model_cfg
 from pipeline import DistP2pContext, DistP2pPipelineStage, DistRpcPipeline
 
@@ -94,7 +95,37 @@ def profile_split_sizes(split_sizes, num_batches, batch_size, callback):
     logging.info(f"\nBest split size is {split_sizes[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
 
 
-def get_pipeline_sched(world_size, partition, rank_order, model_name):
+def parse_yaml_sched(sched, hosts):
+    """Parse the YAML schedule into `stage_layers` and `stage_ranks`."""
+    # list of single-entry maps
+    assert isinstance(sched, list)
+    if len(sched) == 0:
+        raise RuntimeError("No viable schedule found")
+    stage_layers = []
+    stage_ranks = []
+    for stage in sched:
+        # dict with a single mapping: host -> [layer_start, layer_end]
+        assert len(stage) == 1
+        for host, layers in stage.items():
+            assert len(layers) == 2
+            stage_layers.append((int(layers[0]), int(layers[1])))
+            if hosts:
+                try:
+                    stage_ranks.append(hosts.index(host))
+                except ValueError:
+                    print(f"Scheduling: host not found in hosts list: {host}")
+                    raise
+            else:
+                try:
+                    stage_ranks.append(int(host))
+                except ValueError:
+                    print(f"Scheduling: 'hosts' not specified, failed to parse as rank: {host}")
+                    raise
+    return stage_layers, stage_ranks
+
+
+def get_pipeline_sched(world_size, hosts, partition, rank_order, comm, model_name, batch_size,
+                       s_models_file, s_dev_types_file, s_dev_file):
     """Get the pipeline schedule."""
     if partition:
         # User specified the stage layers
@@ -117,7 +148,22 @@ def get_pipeline_sched(world_size, partition, rank_order, model_name):
         stage_layers = [(1, model_cfg.get_model_layers(model_name))]
         stage_ranks = [0]
     else:
-        raise RuntimeError("Automated distributed scheduling not implemented yet")
+        # Compute the distributed schedule
+        # Set membership constraints: hosts in "s_dev_file" <= "hosts" <= hosts in "world" context
+        # Since "hosts" is an implicit (rather than explicit) host-to-rank mapping, we enforce:
+        #   "hosts" == hosts in "world" context
+        print("Scheduling: using scheduler algorithm")
+        if hosts:
+            hosts = hosts.split(',')
+            if len(hosts) != world_size:
+                raise RuntimeError("Specified hosts count != world size")
+        # comm='rpc' is _presumed_ to not use additional buffers (or queues), so set buffers=1
+        buffers = 2 if comm == 'p2p' else 1
+        sched = sched_pipeline(model_name, buffers, buffers, batch_size,
+                               models_file=s_models_file,
+                               dev_types_file=s_dev_types_file,
+                               dev_file=s_dev_file)
+        stage_layers, stage_ranks = parse_yaml_sched(sched, hosts)
     print(f"Scheduling: stage-to-layer mapping: {stage_layers}")
     print(f"Scheduling: stage-to-rank mapping: {stage_ranks}")
     return stage_layers, stage_ranks
@@ -161,10 +207,6 @@ def main():
                         choices=model_cfg.get_model_names(),
                         help="the neural network model for loading")
     parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
-    parser.add_argument("-pt", "--partition", type=str,
-                        help="comma-delimited list of start/end layer pairs, e.g.: '1,48'; default: all layers in the model")
-    parser.add_argument("-r", "--rank-order", type=str, default=None,
-                        help="comma-delimited list of ranks in desired stage order; default: natural rank order until partitions are assigned")
     parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
     parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
     parser.add_argument("-s", "--socket-ifname", type=str, default="lo0", help="socket iframe name, use [ifconfig | ipaddress] to check")
@@ -174,6 +216,34 @@ def main():
     parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
     parser.add_argument("-w", "--worker-threads", default=16, type=int, help="the number of worker threads for the 'rpc' communication backend")
     parser.add_argument("-sp", "--splits", default="8", help="the list of microbatch size")
+    usched = parser.add_argument_group('User-defined scheduling')
+    usched.add_argument("-pt", "--partition", type=str,
+                        help="comma-delimited list of start/end layer pairs, e.g.: '1,24,25,48'; "
+                             "single-node default: all layers in the model")
+    usched.add_argument("-r", "--rank-order", type=str, default=None,
+                        help="comma-delimited list of ranks in desired stage order; "
+                             "default: natural rank order")
+    asched = parser.add_argument_group('Automated scheduling')
+    # This ordered list is a poor man's approach to map the hosts used in the scheduler's output
+    # to the rank values needed by PyTorch's distributed framework.
+    # Conceptually, we *could* require that the devices file refer to ranks rather than hosts.
+    # However, that would:
+    # (1) force our distributed implementation details on the more generic scheduler YAML file
+    # (2) require the YAML file to be tailored to the current rank-to-host deployment scenario,
+    #     but rank-to-host selection is an entirely arbitrary decision on the user's part.
+    # With this, the user sets that mapping entirely from the command line; files remain unchanged.
+    # All that said, we'll *try* to treat scheduler hosts output as ranks if this isn't specified.
+    asched.add_argument("-H", "--hosts", type=str,
+                        help="comma-delimited list of hosts in rank order; "
+                             "required for automated scheduling")
+    asched.add_argument("-sm", "--sched-models-file", default=None, type=str,
+                        help="models YAML file for scheduler, e.g., models.yml")
+    asched.add_argument("-sdt", "--sched-dev-types-file", default=None, type=str,
+                        help="device types YAML file for scheduler, e.g., device_types.yml")
+    asched.add_argument("-sd", "--sched-dev-file", default=None, type=str,
+                        help="devices YAML file for scheduler, e.g., devices.yml; "
+                             "devices in file should satisfy set membership constraint: "
+                             "devices <= HOSTS")
     args = parser.parse_args()
     torch.set_printoptions(profile=args.print,threshold=args.threshold)
     ## Force pytorch use CPU
@@ -209,8 +279,10 @@ def main():
     # (1) with comm='p2p': distributes it, then each stage initializes their own stage context
     # (2) with comm='rpc': the rank assigned to stage 0 instantiates the pipeline
     if rank == 0:
-        stage_layers, stage_ranks = get_pipeline_sched(world_size, args.partition, args.rank_order,
-                                                       model_name)
+        stage_layers, stage_ranks = get_pipeline_sched(world_size, args.hosts, args.partition, args.rank_order,
+                                                       args.comm, model_name, batch_size,
+                                                       args.sched_models_file, args.sched_dev_types_file,
+                                                       args.sched_dev_file)
         print(f"Stage layers: {stage_layers}")
         print(f"Stage ranks: {stage_ranks}")
 
