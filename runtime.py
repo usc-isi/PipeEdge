@@ -159,10 +159,14 @@ def get_pipeline_sched(world_size, hosts, partition, rank_order, comm, model_nam
                 raise RuntimeError("Specified hosts count != world size")
         # comm='rpc' is _presumed_ to not use additional buffers (or queues), so set buffers=1
         buffers = 2 if comm == 'p2p' else 1
+        # the user can build the binary anywhere, but this is where we document to do it
+        app = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           'partition', 'build', 'sched-pipeline')
         sched = sched_pipeline(model_name, buffers, buffers, batch_size,
                                models_file=s_models_file,
                                dev_types_file=s_dev_types_file,
-                               dev_file=s_dev_file)
+                               dev_file=s_dev_file,
+                               app_paths=[app])
         stage_layers, stage_ranks = parse_yaml_sched(sched, hosts)
     print(f"Scheduling: stage-to-layer mapping: {stage_layers}")
     print(f"Scheduling: stage-to-rank mapping: {stage_ranks}")
