@@ -1,4 +1,5 @@
 """Pipeline contexts."""
+import torch
 from torch.distributed import rpc
 from edgepipe.comm import p2p
 
@@ -36,6 +37,16 @@ class DistRpcPipeline():
 
     def __exit__(self, *args):
         self.shutdown()
+
+    def cmd_broadcast(self, remote_cmd_handler, cmd, tensors=None):
+        """Broadcast a command."""
+        assert self._initialized
+        futs = []
+        for rank in range(self._world_size):
+            if rank != self._rank:
+                fut = rpc.rpc_async(rank, remote_cmd_handler, args=(cmd, tensors))
+                futs.append(fut)
+        torch.futures.wait_all(futs)
 
     def forward_model(self, model, inputs, split_size, results_cb):
         """Drive the distributed pipeline model with input data."""

@@ -191,6 +191,22 @@ def load_inputs(model_name, batch_size):
     return inputs
 
 
+sched_q = queue.Queue()
+stop_event = threading.Event()
+def handle_cmd(cmd, tensors):
+    """Process received commands."""
+    if cmd == CMD_STOP:
+        print('handle_cmd: stop')
+        stop_event.set()
+    elif cmd == CMD_SCHED:
+        print('handle_cmd: sched')
+        assert isinstance(tensors, tuple)
+        assert len(tensors) == 2 # stage_layers, stage_ranks
+        sched_q.put((tensors[0].tolist(), tensors[1].tolist()))
+    else:
+        print(f'handle_cmd: Unknown command: {cmd}')
+
+
 def main():
     """Main function."""
     #########################################################
@@ -288,20 +304,6 @@ def main():
 
     tik = time.time()
     if args.comm == 'p2p':
-        stop_event = threading.Event()
-        sched_q = queue.Queue()
-        def handle_cmd(cmd, tensors):
-            """Process received commands."""
-            if cmd == CMD_STOP:
-                print('handle_cmd: stop')
-                stop_event.set()
-            elif cmd == CMD_SCHED:
-                print('handle_cmd: sched')
-                assert isinstance(tensors, tuple)
-                assert len(tensors) == 2 # stage_layers, stage_ranks
-                sched_q.put((tensors[0].tolist(), tensors[1].tolist()))
-            else:
-                print(f'handle_cmd: Unknown command: {cmd}')
         # Initialize the distributed P2P context
         with DistP2pContext(world_size, rank, handle_cmd) as dist_ctx:
             # Send or receive the schedule
@@ -345,6 +347,16 @@ def main():
         # Initialize the distributed RPC context
         # print(f"GLOO Threads: {num_worker_threads}")
         with DistRpcPipeline(world_size, rank, num_worker_threads) as pipeline:
+            # Send or receive the schedule
+            if rank == 0:
+                print("Broadcasting schedule")
+                pipeline.cmd_broadcast(handle_cmd, CMD_SCHED,
+                                       (torch.tensor(stage_layers), torch.tensor(stage_ranks)))
+            else:
+                print("Waiting for schedule")
+                stage_layers, stage_ranks = sched_q.get()
+                print(f"Stage layers: {stage_layers}")
+                print(f"Stage ranks: {stage_ranks}")
             if rank == stage_ranks[0]:
                 inputs = load_inputs(model_name, batch_size)
                 print("Run mastering \n")
