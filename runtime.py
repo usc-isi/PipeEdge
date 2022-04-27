@@ -124,7 +124,7 @@ def parse_yaml_sched(sched, hosts):
     return stage_layers, stage_ranks
 
 
-def get_pipeline_sched(world_size, hosts, partition, rank_order, comm, model_name, batch_size,
+def get_pipeline_sched(world_size, hosts, partition, rank_order, comm, model_name, microbatch_size,
                        s_models_file, s_dev_types_file, s_dev_file):
     """Get the pipeline schedule."""
     if partition:
@@ -162,7 +162,7 @@ def get_pipeline_sched(world_size, hosts, partition, rank_order, comm, model_nam
         # the user can build the binary anywhere, but this is where we document to do it
         app = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            'partition', 'build', 'sched-pipeline')
-        sched = sched_pipeline(model_name, buffers, buffers, batch_size,
+        sched = sched_pipeline(model_name, buffers, buffers, microbatch_size,
                                models_file=s_models_file,
                                dev_types_file=s_dev_types_file,
                                dev_file=s_dev_file,
@@ -299,8 +299,14 @@ def main():
     # (1) with comm='p2p': distributes it, then each stage initializes their own stage context
     # (2) with comm='rpc': the rank assigned to stage 0 instantiates the pipeline
     if rank == 0:
+        if len(num_split) > 1 and args.partition is None and world_size > 1:
+            # Code isn't structured to easily recompute/redeploy schedules for each microbatch size.
+            # Supporting multiple microbatch sizes is really a profiling feature anyway, which
+            # implies a fixed partitioning that the user should have determined a priori and
+            # specified with the "partition" argument (rather than letting the scheduler decide).
+            print(f"Warning: computing schedule based only on first microbatch size: {num_split[0]}")
         stage_layers, stage_ranks = get_pipeline_sched(world_size, args.hosts, args.partition, args.rank_order,
-                                                       args.comm, model_name, batch_size,
+                                                       args.comm, model_name, num_split[0],
                                                        args.sched_models_file, args.sched_dev_types_file,
                                                        args.sched_dev_file)
         print(f"Stage layers: {stage_layers}")
