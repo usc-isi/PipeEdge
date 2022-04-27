@@ -13,7 +13,7 @@ import torch
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 from edgepipe.sched.scheduler import sched_pipeline
 import model_cfg
-from pipeline import DistP2pContext, DistP2pPipelineStage, DistRpcPipeline
+from pipeline import DistP2pContext, DistP2pPipelineStage, DistRpcContext
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log',level=logging.INFO)
@@ -346,11 +346,11 @@ def main():
     else:
         # Initialize the distributed RPC context
         # print(f"GLOO Threads: {num_worker_threads}")
-        with DistRpcPipeline(world_size, rank, num_worker_threads) as pipeline:
+        with DistRpcContext(world_size, rank, num_worker_threads) as dist_ctx:
             # Send or receive the schedule
             if rank == 0:
                 print("Broadcasting schedule")
-                pipeline.cmd_broadcast(handle_cmd, CMD_SCHED,
+                dist_ctx.cmd_broadcast(handle_cmd, CMD_SCHED,
                                        (torch.tensor(stage_layers), torch.tensor(stage_ranks)))
             else:
                 print("Waiting for schedule")
@@ -365,7 +365,7 @@ def main():
                 def drive_pipeline(split_size):
                     """Feed the pipeline."""
                     # this call is synchronous - it won't return until it has the results
-                    pipeline.forward_model(model, inputs, split_size, handle_results)
+                    dist_ctx.forward_model(model, inputs, split_size, handle_results)
                 profile_split_sizes(num_split, num_batches, batch_size, drive_pipeline)
 
     tok = time.time()

@@ -4,8 +4,8 @@ from torch.distributed import rpc
 from edgepipe.comm import p2p
 
 
-class DistRpcPipeline():
-    """The singleton distributed RPC pipeline context manager."""
+class DistRpcContext():
+    """The singleton distributed RPC context manager."""
 
     def __init__(self, world_size, rank, num_rpc_worker_threads):
         self._world_size = world_size
