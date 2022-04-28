@@ -11,6 +11,7 @@ def save_weights(model, file_name):
     np.savez(file_name, **weights)
 
 if __name__=="__main__":
+    # NOTE: repo has a dependency on the timm package, which isn't an automatic torch dependency
     model = torch.hub.load('facebookresearch/deit:main', 'deit_base_distilled_patch16_224',
                            pretrained=True)
     save_weights(model, 'DeiT_B_distilled.npz')
