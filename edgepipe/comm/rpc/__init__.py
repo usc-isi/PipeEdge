@@ -1,7 +1,48 @@
 """RPC communication module."""
 import torch
 from torch import nn
-from torch.distributed.rpc import RRef
+from torch.distributed import rpc
+from .. import DistContext
+
+
+class DistRpcContext(DistContext):
+    """The singleton distributed RPC context manager."""
+
+    def __init__(self, world_size, rank, num_rpc_worker_threads):
+        super().__init__(world_size, rank)
+        self._num_rpc_worker_threads = num_rpc_worker_threads
+
+    def init(self):
+        """Initialize the distributed context."""
+        super().init()
+        # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
+        options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=self._num_rpc_worker_threads,
+                                                  rpc_timeout=3000)
+        rpc.init_rpc(f"worker{self._rank}",
+                     rank=self._rank,
+                     world_size=self._world_size,
+                     rpc_backend_options=options)
+
+    def shutdown(self):
+        """Wait for all RPCs to finish and shutdown the distributed context."""
+        super().shutdown()
+        rpc.shutdown()
+
+    def cmd_broadcast(self, remote_cmd_handler, cmd, tensors=None):
+        """Broadcast a command."""
+        assert self._initialized
+        futs = []
+        for rank in range(self._world_size):
+            if rank != self._rank:
+                fut = rpc.rpc_async(rank, remote_cmd_handler, args=(cmd, tensors))
+                futs.append(fut)
+        torch.futures.wait_all(futs)
+
+    def forward_model(self, model, inputs, split_size, results_cb):
+        """Drive the distributed pipeline model with input data."""
+        assert self._initialized
+        outputs = model(inputs, split_size=split_size)
+        results_cb(outputs)
 
 
 def forward_pre_hook_rpc(_module, x):
@@ -27,7 +68,7 @@ class DistRpcModule(nn.Module):
         split_size = kwargs.get('split_size', len(xs))
         out_futures = []
         for x in iter(xs.split(split_size, dim=0)):
-            x_rref = RRef(x)
+            x_rref = rpc.RRef(x)
             for rref in self._rref_list[:-1]:
                 x_rref = rref.remote().__call__(x_rref)
             y_rref = self._rref_list[-1].rpc_async().__call__(x_rref)

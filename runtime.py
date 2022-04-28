@@ -11,9 +11,11 @@ from PIL import Image
 import requests
 import torch
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
+from edgepipe.comm.p2p import DistP2pContext, DistP2pPipelineStage
+from edgepipe.comm.rpc import DistRpcContext
 from edgepipe.sched.scheduler import sched_pipeline
 import model_cfg
-from pipeline import DistP2pContext, DistP2pPipelineStage, DistRpcContext
+
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log',level=logging.INFO)

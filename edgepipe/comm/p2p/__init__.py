@@ -5,6 +5,7 @@ import threading
 import time
 import torch
 import torch.distributed as dist
+from .. import DistContext
 from .util import DistRequestWaitDaemon
 
 # Base tag values
@@ -34,6 +35,32 @@ TORCH_TYPES = [ torch.float32,
 TORCH_TYPES_ENUM = collections.OrderedDict()
 for i, t in enumerate(TORCH_TYPES):
     TORCH_TYPES_ENUM[t] = i
+
+
+class DistP2pContext(DistContext):
+    """The singleton distributed P2P context manager."""
+
+    def __init__(self, world_size, rank, cmd_cb):
+        super().__init__(world_size, rank)
+        self._thread_cmd = CommandThread(cmd_cb)
+
+    def init(self):
+        """Initialize the distributed context and threads."""
+        super().init()
+        init(self._rank, self._world_size)
+        self._thread_cmd.start()
+
+    def shutdown(self):
+        """Shutdown threads and the distributed context."""
+        super().shutdown()
+        self._thread_cmd.stop()
+        self._thread_cmd.join()
+        shutdown()
+
+    def cmd_broadcast(self, cmd, tensors=None):
+        """Broadcast a command."""
+        assert self._initialized
+        cmd_broadcast(cmd, tensors=tensors)
 
 
 class ConditionQueue(queue.Queue):
@@ -252,3 +279,78 @@ def cmd_broadcast(cmd, tensors=None):
                 reqs += _send_tensor(tensor, dst, TAG_BASE_CMD, fn_send=dist.isend)
     for req in reqs:
         req.wait()
+
+
+class DistP2pPipelineStage():
+    """The singleton distributed P2P pipeline stage context manager."""
+
+    def __init__(self, stage_ranks, stage, work_cb, results_cb):
+        self._stage = stage
+        self._initialized = False
+        self._queues = {}
+        self._threads = {}
+        if self._stage is not None:
+            self._create_stage(stage_ranks, work_cb, results_cb)
+
+    def _create_stage(self, stage_ranks, work_cb, results_cb):
+        # stage 0 feeds `in` queue using `enqueue_batch()`; last stage sends results to stage 0
+        # inputs are already loaded in memory, so no need to limit in-queue size on stage 0
+        if self._stage == 0:
+            self._queues['in'] = ConditionQueue(maxsize=0)
+            # results thread must use a different queue than feeds the first model shard
+            self._queues['res'] = ConditionQueue(maxsize=1)
+            self._threads['res'] = TensorWorkThread(self._queues['res'], None, results_cb)
+        else:
+            self._queues['in'] = ConditionQueue(maxsize=1)
+
+        if len(stage_ranks) > 1:
+            rank_src = stage_ranks[(self._stage - 1)]
+            rank_dst = stage_ranks[(self._stage + 1) % len(stage_ranks)]
+            # create send/receive/command threads
+            self._queues['out'] = ConditionQueue(maxsize=1)
+            self._threads['send'] = TensorSendThread(self._queues['out'], rank_dst)
+            if self._stage == 0:
+                # stage 0's receiver thread gets results, so feeds a different queue
+                self._threads['recv'] = TensorRecvThread(self._queues['res'], rank_src)
+            else:
+                self._threads['recv'] = TensorRecvThread(self._queues['in'], rank_src)
+        else:
+            # degenerate case: no send/receive/command threads; the out queue is the results queue
+            self._queues['out'] = self._queues['res']
+
+        # all stages do work
+        self._threads['work'] = TensorWorkThread(self._queues['in'], self._queues['out'], work_cb)
+
+    def init(self):
+        """Initialize the distributed context and threads."""
+        assert not self._initialized
+        self._initialized = True
+        for thr in self._threads.values():
+            thr.start()
+
+    def shutdown(self):
+        """Shutdown threads and the distributed context."""
+        assert self._initialized
+        self._initialized = False
+        for thr in self._threads.values():
+            thr.stop()
+            thr.join()
+
+    def __enter__(self):
+        self.init()
+        return self
+
+    def __exit__(self, *args):
+        self.shutdown()
+
+    def enqueue_batch(self, inputs, split_size):
+        """Insert data into the front of the pipeline."""
+        assert self._stage == 0
+        assert self._initialized
+        for input_chunk in iter(inputs.split(split_size, dim=0)):
+            queue_in = self._queues['in']
+            with queue_in.condition:
+                while queue_in.full():
+                    queue_in.condition.wait()
+                queue_in.put(input_chunk)
+                queue_in.condition.notify_all()
