@@ -1,5 +1,9 @@
 # EdgePipe
 
+EdgePipe (aka PipeEdge) is an inference framework that pipelines neural network (e.g., transformer) model shards on distributed devices.
+It includes an automatic partition scheduler which maps model layers to devices to optimize throughput.
+
+
 ## Prerequisites
 
 Install dependencies with with:
@@ -62,6 +66,17 @@ A partitioning for 4 nodes could be:
 partition = [1,4,5,8,9,20,21,48]
 ```
 
+
+## Automatic Partition Scheduling
+
+In summary, the `sched-pipeline` scheduling application uses three input YAML files to map model partitions to devices (hosts).
+Automated profiling helps produce two of these files; the third lists available hosts and is straightforward to create for your deployment environment.
+For detailed instructions and documentation, see [README_Profiler.md](README_Profiler.md) and [README_Scheduler.md](README_Scheduler.md), and note that you will need to compile the scheduler before it can be used.
+
+Point `runtime.py` to the YAML files using the options `-sm/--sched-models-file`, `--sdt/--sched-dev-types-file`, and `-sd/--sched-dev-file`.
+The runtime passes these through to the previously compiled scheduler application, along with other configurations like the model name and microbatch size.
+Then map the hosts specified in the third YAML file to the distributed ranks in your runtime using the `-H/--hosts` option.
+Do not specify the `-pt/--partition` option, which is for manually specifying the schedule and takes precedence over automated scheduling.
 
 
 ## TODO
