@@ -47,7 +47,7 @@ class DistP2pContext(DistContext):
     def init(self):
         """Initialize the distributed context and threads."""
         super().init()
-        init(self._rank, self._world_size)
+        dist.init_process_group(dist.Backend.GLOO, rank=self._rank, world_size=self._world_size)
         self._thread_cmd.start()
 
     def shutdown(self):
@@ -55,12 +55,24 @@ class DistP2pContext(DistContext):
         super().shutdown()
         self._thread_cmd.stop()
         self._thread_cmd.join()
-        shutdown()
+        dist.destroy_process_group()
 
     def cmd_broadcast(self, cmd, tensors=None):
         """Broadcast a command."""
         assert self._initialized
-        cmd_broadcast(cmd, tensors=tensors)
+        if tensors is None:
+            tensors = ()
+        elif isinstance(tensors, torch.Tensor):
+            tensors = (tensors,)
+        tensor_cmd = torch.tensor([cmd, len(tensors)], dtype=torch.int)
+        reqs = []
+        for dst in range(self._world_size):
+            if dst != self._rank:
+                reqs.append(dist.isend(tensor_cmd, dst=dst, tag=TAG_BASE_CMD))
+                for tensor in tensors:
+                    reqs += _send_tensor(tensor, dst, TAG_BASE_CMD, fn_send=dist.isend)
+        for req in reqs:
+            req.wait()
 
 
 class ConditionQueue(queue.Queue):
@@ -254,31 +266,6 @@ class CommandThread(threading.Thread):
                 tensor = _recv_tensor(None, TAG_BASE_CMD)
                 tensors += (tensor,)
             self._callback(cmd, tensors)
-
-
-def init(rank, world_size):
-    """Initialize p2p."""
-    dist.init_process_group(dist.Backend.GLOO, rank=rank, world_size=world_size)
-
-def shutdown():
-    """Shutdown p2p."""
-    dist.destroy_process_group()
-
-def cmd_broadcast(cmd, tensors=None):
-    """Broadcast a command."""
-    if tensors is None:
-        tensors = ()
-    elif isinstance(tensors, torch.Tensor):
-        tensors = (tensors,)
-    tensor_cmd = torch.tensor([cmd, len(tensors)], dtype=torch.int)
-    reqs = []
-    for dst in range(dist.get_world_size()):
-        if dst != dist.get_rank():
-            reqs.append(dist.isend(tensor_cmd, dst=dst, tag=TAG_BASE_CMD))
-            for tensor in tensors:
-                reqs += _send_tensor(tensor, dst, TAG_BASE_CMD, fn_send=dist.isend)
-    for req in reqs:
-        req.wait()
 
 
 class DistP2pPipelineStage():
