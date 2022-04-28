@@ -377,9 +377,9 @@ def main():
                 def drive_pipeline(split_size):
                     """Feed the pipeline."""
                     # this call is synchronous - it won't return until it has the results
-                    dist_ctx.forward_model(model, inputs, split_size, handle_results)
+                    outputs = model(inputs, split_size=split_size)
+                    handle_results(outputs)
                 profile_split_sizes(num_split, num_batches, batch_size, drive_pipeline)
-
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")
 

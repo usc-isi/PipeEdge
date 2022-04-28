@@ -38,12 +38,6 @@ class DistRpcContext(DistContext):
                 futs.append(fut)
         torch.futures.wait_all(futs)
 
-    def forward_model(self, model, inputs, split_size, results_cb):
-        """Drive the distributed pipeline model with input data."""
-        assert self._initialized
-        outputs = model(inputs, split_size=split_size)
-        results_cb(outputs)
-
 
 def forward_pre_hook_rpc(_module, x):
     """Copy forward input data from the prior stage as needed."""
