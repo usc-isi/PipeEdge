@@ -77,25 +77,3 @@ Point `runtime.py` to the YAML files using the options `-sm/--sched-models-file`
 The runtime passes these through to the previously compiled scheduler application, along with other configurations like the model name and microbatch size.
 Then map the hosts specified in the third YAML file to the distributed ranks in your runtime using the `-H/--hosts` option.
 Do not specify the `-pt/--partition` option, which is for manually specifying the schedule and takes precedence over automated scheduling.
-
-
-## TODO
-
-- [x] Remove unneccessary code
-- [x] Build layers in the node and reload the weight 
-- [x] Combine the function for different number of nodes
-- [x] Test for correctness
-- [x] Test for multiple nodes 
-- [x] Test for vit-large model
-- [x] Test for vit-huge model
-- [x] Support fine-grained partitioning
-- [x] Add baseline.py   
-- [x] Operator-level partition method
-- [x] Edit profile script
-- [x] Create a simulator 
-- [x] Import profile to Partition
-- [x] Edit Partition script
-- [ ] Import Partition to Runtime
-- [ ] Solve the memory leak problem ([RPC Framework Problem](https://github.com/pytorch/pytorch/issues/61920#issuecomment-886345414))
-
-
