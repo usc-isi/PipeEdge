@@ -6,9 +6,32 @@ It includes an automatic partition scheduler which maps model layers to devices 
 
 ## Prerequisites
 
-Install dependencies with with:
+`Python >= 3.7.3` is recommended (based on evaluation platforms).
+Might support `Python >= 3.6.1` (based on minimum PyTorch version).
+
+We recommend using a Python virtual environment (`virtualenv`), e.g., on Debian or Debian-based Linux (including Ubuntu):
 
 ```sh
+sudo apt-get install python3-venv
+```
+
+or directly with a system-installed `pip`:
+
+```sh
+pip3 install virtualenv
+```
+
+Create and activate the virtualenv:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+```
+
+Install Python package dependencies with:
+
+```sh
+pip install -U pip
 pip install -r requirements.txt
 ```
 
