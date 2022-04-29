@@ -311,8 +311,6 @@ def main():
                                                        args.comm, model_name, num_split[0],
                                                        args.sched_models_file, args.sched_dev_types_file,
                                                        args.sched_dev_file)
-        print(f"Stage layers: {stage_layers}")
-        print(f"Stage ranks: {stage_ranks}")
 
     tik = time.time()
     if args.comm == 'p2p':
