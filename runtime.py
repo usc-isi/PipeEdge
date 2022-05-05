@@ -232,8 +232,6 @@ def main():
     parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
     parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
     parser.add_argument("-s", "--socket-ifname", type=str, default="lo0", help="socket iframe name, use [ifconfig | ipaddress] to check")
-    parser.add_argument("-p","--print", type=str, default = "None", choices=["full", "short", "default"], help="print the [full | short] tensor values")
-    parser.add_argument("-t", "--threshold", default=1000, type=int, help="total number of array elements which trigger summarization rather than full repr")
     parser.add_argument("-n", "--num-batches", default=1, type=int, help="total number of batches")
     parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
     parser.add_argument("-w", "--worker-threads", default=16, type=int, help="the number of worker threads for the 'rpc' communication backend")
@@ -267,7 +265,6 @@ def main():
                              "devices in file should satisfy set membership constraint: "
                              "devices <= HOSTS")
     args = parser.parse_args()
-    torch.set_printoptions(profile=args.print,threshold=args.threshold)
     ## Force pytorch use CPU
     device = torch.device('cpu')
     # parallel_threads = 2
