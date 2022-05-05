@@ -1,0 +1,43 @@
+[project]
+name = "edgepipe"
+version = "0.1.0"
+description = "EdgePipe"
+authors = [
+    { "name" = "Yang Hu", "email" = "yhu210003@usc.edu" },
+    { "name" = "Connor Imes", "email" = "cimes@isi.edu" },
+    { "name" = "Haonan Wang", "email" = "haonanwa@usc.edu" },
+]
+readme = "README.md"
+requires-python = ">=3.7"
+dependencies = [
+    "numpy",
+    "Pillow",
+    "psutil",
+    "PyYAML",
+    "requests",
+    "timm>=0.3.2",
+    "torch>=1.7.0",
+    "transformers>=4.6.0",
+]
+
+[build-system]
+requires = ["py-build-cmake>=0.0.9"]
+build-backend = "py_build_cmake.build"
+
+[tool.py-build-cmake.module]
+directory = "."
+
+[tool.py-build-cmake.sdist]
+include = [
+    "partition/CMakeLists.txt",
+    "partition/sched-pipeline.cpp",
+    "partition/yaml_types.h",
+    "partition/README.md",
+]
+
+[tool.py-build-cmake.cmake]
+minimum_version = "3.8"
+build_type = "RelWithDebInfo"
+source_path = "partition"
+build_args = ["-j"]
+install_components = ["EdgePipe_Runtime"]
