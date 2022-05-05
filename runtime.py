@@ -193,21 +193,32 @@ def main():
     #########################################################
     parser = argparse.ArgumentParser(description="Pipeline Parallelism Runtime",
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    # Positional arguments
     parser.add_argument("rank", type=int, help="the rank for the current node")
     parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
+    # Network configurations
+    parser.add_argument("-s", "--socket-ifname", type=str, default="lo0",
+                        help="socket interface name, use [ifconfig | ipaddress] to check")
+    parser.add_argument("--addr", type=str, default="127.0.0.1",
+                        help="ip address for the master node")
+    parser.add_argument("--port", type=str, default="29500",
+                        help="communication port for the master node")
+    # Communication options
     parser.add_argument("-c", "--comm", type=str, default="rpc",
                         choices=["rpc", "p2p"],
                         help="the communication implementation")
+    parser.add_argument("-w", "--worker-threads", default=16, type=int,
+                        help="the number of worker threads for the 'rpc' communication backend")
+    # Model options
     parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224",
                         choices=model_cfg.get_model_names(),
                         help="the neural network model for loading")
-    parser.add_argument("-M", "--model-file", type=str, help="the model file, if not in working directory")
-    parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
-    parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
-    parser.add_argument("-s", "--socket-ifname", type=str, default="lo0", help="socket iframe name, use [ifconfig | ipaddress] to check")
+    parser.add_argument("-M", "--model-file", type=str,
+                        help="the model file, if not in working directory")
+    # Input options
     parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
     parser.add_argument("-u", "--ubatch-size", default=8, type=int, help="microbatch size")
-    parser.add_argument("-w", "--worker-threads", default=16, type=int, help="the number of worker threads for the 'rpc' communication backend")
+    # Scheduling options (grouped)
     usched = parser.add_argument_group('User-defined scheduling')
     usched.add_argument("-pt", "--partition", type=str,
                         help="comma-delimited list of start/end layer pairs, e.g.: '1,24,25,48'; "
