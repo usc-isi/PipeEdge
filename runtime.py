@@ -70,33 +70,6 @@ def handle_results(tensors):
     # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
 
 
-def profile_split_sizes(split_sizes, num_batches, batch_size, callback):
-    """Iterate over split_sizes and num_batches."""
-    latencies = []
-    throughputs = []
-    for split_size in split_sizes:
-        # print(f"Start calculate split size {split_size}")
-        tik_ss = time.time()
-        for _ in range(num_batches):
-            callback(split_size)
-        tok_ss = time.time()
-        latency = tok_ss - tik_ss
-        throughput = num_batches * batch_size / latency
-        latencies.append(latency)
-        throughputs.append(throughput)
-    best_choice = -1
-    best_throughput = -1
-    for i, _ in enumerate(split_sizes):
-        print(f"Split size {split_sizes[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
-        logging.info(f"Split size {split_sizes[i]}, latency is {latencies[i]}, throughput is {throughputs[i]}")
-        if throughputs[i] > best_throughput:
-            best_throughput = throughputs[i]
-            best_choice = i
-    print("\n---------------- Split output line ----------------")
-    print(f"\nBest split size is {split_sizes[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
-    logging.info(f"\nBest split size is {split_sizes[best_choice]}, Execution time is {latencies[best_choice]}, throughput is {throughputs[best_choice]}\n")
-
-
 def parse_yaml_sched(sched, hosts):
     """Parse the YAML schedule into `stage_layers` and `stage_ranks`."""
     # list of single-entry maps
@@ -232,10 +205,9 @@ def main():
     parser.add_argument("--addr", type=str, default="127.0.0.1", help="ip address for the master node")
     parser.add_argument("--port", type=str, default="29500", help="communication port for the master node")
     parser.add_argument("-s", "--socket-ifname", type=str, default="lo0", help="socket iframe name, use [ifconfig | ipaddress] to check")
-    parser.add_argument("-n", "--num-batches", default=1, type=int, help="total number of batches")
     parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
+    parser.add_argument("-u", "--ubatch-size", default=8, type=int, help="microbatch size")
     parser.add_argument("-w", "--worker-threads", default=16, type=int, help="the number of worker threads for the 'rpc' communication backend")
-    parser.add_argument("-sp", "--splits", default="8", help="the list of microbatch size")
     usched = parser.add_argument_group('User-defined scheduling')
     usched.add_argument("-pt", "--partition", type=str,
                         help="comma-delimited list of start/end layer pairs, e.g.: '1,24,25,48'; "
@@ -291,21 +263,14 @@ def main():
     if model_file is None:
         model_file = model_cfg.get_model_default_weights_file(model_name)
     batch_size = args.batch_size
-    num_batches = args.num_batches
-    num_split = [int(i) for i in args.splits.split(',')]
+    ubatch_size = args.ubatch_size
 
     # The master rank computes schedule, then:
     # (1) with comm='p2p': distributes it, then each stage initializes their own stage context
     # (2) with comm='rpc': the rank assigned to stage 0 instantiates the pipeline
     if rank == 0:
-        if len(num_split) > 1 and args.partition is None and world_size > 1:
-            # Code isn't structured to easily recompute/redeploy schedules for each microbatch size.
-            # Supporting multiple microbatch sizes is really a profiling feature anyway, which
-            # implies a fixed partitioning that the user should have determined a priori and
-            # specified with the "partition" argument (rather than letting the scheduler decide).
-            print(f"Warning: computing schedule based only on first microbatch size: {num_split[0]}")
         stage_layers, stage_ranks = get_pipeline_sched(world_size, args.hosts, args.partition, args.rank_order,
-                                                       args.comm, model_name, num_split[0],
+                                                       args.comm, model_name, ubatch_size,
                                                        args.sched_models_file, args.sched_dev_types_file,
                                                        args.sched_dev_file)
 
@@ -338,13 +303,16 @@ def main():
             with DistP2pPipelineStage(stage_ranks, stage, model, handle_results) as stage_ctx:
                 if stage == 0:
                     inputs = load_inputs(model_name, batch_size)
-                    def drive_pipeline(split_size):
-                        """Feed the pipeline."""
-                        # this call is asynchronous - wait for results to get end-to-end timings
-                        start_count = results_counter.value
-                        stage_ctx.enqueue_batch(inputs, split_size)
-                        results_counter.wait_gte(start_count + len(inputs))
-                    profile_split_sizes(num_split, num_batches, batch_size, drive_pipeline)
+                    tik_data = time.time()
+                    # this call is asynchronous - wait for results to get end-to-end timings
+                    start_count = results_counter.value
+                    stage_ctx.enqueue_batch(inputs, ubatch_size)
+                    results_counter.wait_gte(start_count + len(inputs))
+                    tok_data = time.time()
+                    latency = tok_data - tik_data
+                    throughput = batch_size / latency
+                    print(f"Latency is {latency}, throughput is {throughput}")
+                    logging.info(f"Latency is {latency}, throughput is {throughput}")
                     # will set stop_event on all other ranks
                     dist_ctx.cmd_broadcast(CMD_STOP)
                     stop_event.set()
@@ -369,12 +337,15 @@ def main():
                 print("Run mastering \n")
                 # Create model shards on workers (requires distributed context to be initialized)
                 model = model_cfg.dist_rpc_module_factory(model_name, model_file, stage_ranks, stage_layers)
-                def drive_pipeline(split_size):
-                    """Feed the pipeline."""
-                    # this call is synchronous - it won't return until it has the results
-                    outputs = model(inputs, split_size=split_size)
-                    handle_results(outputs)
-                profile_split_sizes(num_split, num_batches, batch_size, drive_pipeline)
+                tik_data = time.time()
+                # this call is synchronous - it won't return until it has the results
+                outputs = model(inputs, split_size=ubatch_size)
+                handle_results(outputs)
+                tok_data = time.time()
+                latency = tok_data - tik_data
+                throughput = batch_size / latency
+                print(f"Latency is {latency}, throughput is {throughput}")
+                logging.info(f"Latency is {latency}, throughput is {throughput}")
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")
 
