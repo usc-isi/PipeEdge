@@ -51,6 +51,15 @@ class DistRpcModule(nn.Module):
         super().__init__()
         self._rref_list = []
 
+    def set_quant_bits(self, stage_quant):
+        """Set quantization bit configurations on each stage."""
+        assert len(stage_quant) == len(self._rref_list)
+        hook_futures = []
+        for stage, rref in enumerate(self._rref_list):
+            q_bits = torch.tensor((0 if stage == 0 else stage_quant[stage - 1], stage_quant[stage]))
+            hook_futures.append(rref.rpc_async().register_buffer('quant_bits', q_bits))
+        torch.futures.wait_all(hook_futures)
+
     def _register_hooks(self):
         """Register hooks."""
         hook_futures = [rref.rpc_async().register_forward_pre_hook(forward_pre_hook_rpc)

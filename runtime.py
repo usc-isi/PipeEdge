@@ -99,14 +99,26 @@ def parse_yaml_sched(sched, hosts):
     return stage_layers, stage_ranks
 
 
-def get_pipeline_sched(world_size, hosts, partition, rank_order, comm, model_name, microbatch_size,
-                       s_models_file, s_dev_types_file, s_dev_file):
+def _get_default_quant(n_stages):
+    return [0] * n_stages
+
+
+def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, comm, model_name,
+                       microbatch_size, s_models_file, s_dev_types_file, s_dev_file):
     """Get the pipeline schedule."""
     if partition:
         # User specified the stage layers
         print("Scheduling: using user-defined partitioning")
         parts = [int(i) for i in partition.split(',')]
         stage_layers = [(parts[i], parts[i+1]) for i in range(0, len(parts), 2)]
+        if quant:
+            # User specified quantization
+            print("Scheduling: using user-defined quantization")
+            stage_quant = [int(i) for i in quant.split(',')]
+        else:
+            # No quantization by default
+            print("Scheduling: using default quantization")
+            stage_quant = _get_default_quant(len(stage_layers))
         if rank_order:
             # User specified the stage ranks
             print("Scheduling: using user-defined rank ordering")
@@ -115,12 +127,15 @@ def get_pipeline_sched(world_size, hosts, partition, rank_order, comm, model_nam
             # Use natural rank order
             print("Scheduling: using natural rank ordering")
             stage_ranks = list(range(len(stage_layers)))
+    elif quant:
+        raise RuntimeError("Must specify partition with quantization")
     elif rank_order:
         raise RuntimeError("Must specify partition with rank stage ordering")
     elif world_size <= 1:
         # Degenerate case: everything runs locally
         print("Scheduling: single-node execution (degenerate case)")
         stage_layers = [(1, model_cfg.get_model_layers(model_name))]
+        stage_quant = _get_default_quant(len(stage_layers))
         stage_ranks = [0]
     else:
         # Compute the distributed schedule
@@ -143,9 +158,12 @@ def get_pipeline_sched(world_size, hosts, partition, rank_order, comm, model_nam
                                dev_file=s_dev_file,
                                app_paths=[app])
         stage_layers, stage_ranks = parse_yaml_sched(sched, hosts)
+        # no quantization support yet for automated scheduling
+        stage_quant = _get_default_quant(len(stage_layers))
     print(f"Scheduling: stage-to-layer mapping: {stage_layers}")
+    print(f"Scheduling: stage output quantization: {stage_quant}")
     print(f"Scheduling: stage-to-rank mapping: {stage_ranks}")
-    return stage_layers, stage_ranks
+    return stage_layers, stage_quant, stage_ranks
 
 
 def load_inputs(model_name, batch_size):
@@ -180,8 +198,8 @@ def handle_cmd(cmd, tensors):
     elif cmd == CMD_SCHED:
         print('handle_cmd: sched')
         assert isinstance(tensors, tuple)
-        assert len(tensors) == 2 # stage_layers, stage_ranks
-        sched_q.put((tensors[0].tolist(), tensors[1].tolist()))
+        assert len(tensors) == 3 # stage_layers, stage_quant, stage_ranks
+        sched_q.put((tensors[0].tolist(), tensors[1].tolist(), tensors[2].tolist()))
     else:
         print(f'handle_cmd: Unknown command: {cmd}')
 
@@ -223,6 +241,8 @@ def main():
     usched.add_argument("-pt", "--partition", type=str,
                         help="comma-delimited list of start/end layer pairs, e.g.: '1,24,25,48'; "
                              "single-node default: all layers in the model")
+    usched.add_argument("-q", "--quant", type=str,
+                        help="comma-delimited list of quantization bits to use after each stage")
     usched.add_argument("-r", "--rank-order", type=str, default=None,
                         help="comma-delimited list of ranks in desired stage order; "
                              "default: natural rank order")
@@ -280,10 +300,11 @@ def main():
     # (1) with comm='p2p': distributes it, then each stage initializes their own stage context
     # (2) with comm='rpc': the rank assigned to stage 0 instantiates the pipeline
     if rank == 0:
-        stage_layers, stage_ranks = get_pipeline_sched(world_size, args.hosts, args.partition, args.rank_order,
-                                                       args.comm, model_name, ubatch_size,
-                                                       args.sched_models_file, args.sched_dev_types_file,
-                                                       args.sched_dev_file)
+        stage_layers, stage_quant, stage_ranks = \
+            get_pipeline_sched(world_size, args.hosts, args.partition, args.quant, args.rank_order,
+                               args.comm, model_name, ubatch_size,
+                               args.sched_models_file, args.sched_dev_types_file,
+                               args.sched_dev_file)
 
     tik = time.time()
     if args.comm == 'p2p':
@@ -293,10 +314,12 @@ def main():
             if rank == 0:
                 print("Broadcasting schedule")
                 dist_ctx.cmd_broadcast(CMD_SCHED,
-                                       (torch.tensor(stage_layers), torch.tensor(stage_ranks)))
+                                       (torch.tensor(stage_layers),
+                                        torch.tensor(stage_quant),
+                                        torch.tensor(stage_ranks)))
             else:
                 print("Waiting for schedule")
-                stage_layers, stage_ranks = sched_q.get()
+                stage_layers, stage_quant, stage_ranks = sched_q.get()
                 print(f"Stage layers: {stage_layers}")
                 print(f"Stage ranks: {stage_ranks}")
             # Create model shard locally
@@ -310,6 +333,8 @@ def main():
             else:
                 model = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage][0],
                                                        stage_layers[stage][1], stage)
+                q_bits = torch.tensor((0 if stage == 0 else stage_quant[stage - 1], stage_quant[stage]))
+                model.register_buffer('quant_bits', q_bits)
             # Initialize the stage context
             with DistP2pPipelineStage(stage_ranks, stage, model, handle_results) as stage_ctx:
                 if stage == 0:
@@ -337,10 +362,12 @@ def main():
             if rank == 0:
                 print("Broadcasting schedule")
                 dist_ctx.cmd_broadcast(handle_cmd, CMD_SCHED,
-                                       (torch.tensor(stage_layers), torch.tensor(stage_ranks)))
+                                       (torch.tensor(stage_layers),
+                                        torch.tensor(stage_quant),
+                                        torch.tensor(stage_ranks)))
             else:
                 print("Waiting for schedule")
-                stage_layers, stage_ranks = sched_q.get()
+                stage_layers, stage_quant, stage_ranks = sched_q.get()
                 print(f"Stage layers: {stage_layers}")
                 print(f"Stage ranks: {stage_ranks}")
             if rank == stage_ranks[0]:
@@ -348,6 +375,7 @@ def main():
                 print("Run mastering \n")
                 # Create model shards on workers (requires distributed context to be initialized)
                 model = model_cfg.dist_rpc_module_factory(model_name, model_file, stage_ranks, stage_layers)
+                model.set_quant_bits(stage_quant)
                 tik_data = time.time()
                 # this call is synchronous - it won't return until it has the results
                 outputs = model(inputs, split_size=ubatch_size)
