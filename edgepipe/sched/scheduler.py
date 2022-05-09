@@ -1,4 +1,5 @@
 """Scheduling."""
+import os
 import subprocess
 import sys
 from typing import Dict, List
@@ -47,8 +48,11 @@ def sched_pipeline(model_name, buffers_in, buffers_out, batch_size, dtype='torch
             raise
     if proc is None:
         # try to find app on the system path
+        app_path = 'sched-pipeline'
+        if os.name == 'nt':
+            app_path += '.exe'
         try:
-            proc = subprocess.run(['sched-pipeline'] + args, capture_output=True, check=True)
+            proc = subprocess.run([app_path] + args, capture_output=True, check=True)
         except FileNotFoundError:
             print('Could not locate sched-pipeline application - is it on your PATH?')
             raise

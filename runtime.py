@@ -152,6 +152,8 @@ def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, comm, mo
         # the user can build the binary anywhere, but this is where we document to do it
         app = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            'partition', 'build', 'sched-pipeline')
+        if os.name == 'nt':
+            app += '.exe'
         sched = sched_pipeline(model_name, buffers, buffers, microbatch_size,
                                models_file=s_models_file,
                                dev_types_file=s_dev_types_file,
