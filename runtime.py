@@ -329,6 +329,7 @@ def main():
                 logging.info("Waiting for schedule")
                 stage_layers, stage_quant, stage_ranks = sched_q.get()
                 logging.info("Stage layers: %s", stage_layers)
+                logging.info("Stage quant: %s", stage_quant)
                 logging.info("Stage ranks: %s", stage_ranks)
             # Create model shard locally
             try:
@@ -380,6 +381,7 @@ def main():
                 logging.info("Waiting for schedule")
                 stage_layers, stage_quant, stage_ranks = sched_q.get()
                 logging.info("Stage layers: %s", stage_layers)
+                logging.info("Stage quant: %s", stage_quant)
                 logging.info("Stage ranks: %s", stage_ranks)
             if rank == stage_ranks[0]:
                 inputs = load_inputs(model_name, batch_size)
