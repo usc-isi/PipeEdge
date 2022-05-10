@@ -1,4 +1,5 @@
 """BERT transformers."""
+import logging
 import math
 import time
 import numpy as np
@@ -32,13 +33,13 @@ class BertTransformerShard(TransformerShard):
 
         print(f">>>> Model name {model_name}")
         if self.load_weight:
-            print(f">>>> Load weight file {self.weights_file_name}")
+            logging.info(f">>>> Load weight file {self.weights_file_name}")
             with np.load(self.weights_file_name) as weights:
                 self._make_layer(weights)
         else:
             self._make_layer(None)
 
-        print(f"======= Finish Build BertTransformerShard{self.stage} ==========")
+        logging.info(f"======= Finish Build BertTransformerShard{self.stage} ==========")
 
     def _make_layer(self, weights):
         ## first Shard
@@ -254,12 +255,12 @@ class BertTransformerShard(TransformerShard):
                 finish_batch_time = time.time()
                 self.total_data += x.shape[0] ##14 #split_size
                 tmp_throughput = self.total_data/(finish_batch_time-self.batch_0_finish)
-                print(f"total data is {self.total_data}, time is {finish_batch_time-self.batch_0_finish}, temporarily throughput is  {tmp_throughput} ")
+                logging.info(f"total data is {self.total_data}, time is {finish_batch_time-self.batch_0_finish}, temporarily throughput is  {tmp_throughput} ")
 
         self.total_time +=  (end - start)
         self.total_batch += 1
-        print(f"Round {self.total_batch}: memory {self.process.memory_info().rss // 1000000} MB")
-        print(f"Shard{self.stage} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
+        logging.info(f"Round {self.total_batch}: memory {self.process.memory_info().rss // 1000000} MB")
+        logging.info(f"Shard{self.stage} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         if self.is_last:
             return x
         return x, skip
