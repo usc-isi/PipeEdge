@@ -343,7 +343,7 @@ def main():
                                                        stage_layers[stage][1], stage)
                 q_bits = torch.tensor((0 if stage == 0 else stage_quant[stage - 1], stage_quant[stage]))
                 model.register_buffer('quant_bits', q_bits)
-                if stage != len(partition) / 2 - 1:
+                if stage != len(stage_ranks) - 1:
                     model.register_forward_hook(forward_hook_quant_encode)
                 if stage != 0:
                     model.register_forward_pre_hook(forward_pre_hook_quant_decode)
