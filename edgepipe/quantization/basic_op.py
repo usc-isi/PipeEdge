@@ -2,13 +2,14 @@
 import numpy as np
 import torch
 
-def _quant_op(input_data, bit, need_bitmap=True, mode='original'):
+def _quant_op(input_data, bit, mode='original'):
     """
     The input and output should be all on the interval [0, 1].
         bit is only defined on positive integer values.
     """
     assert bit > 0
-    assert np.all(input_data >= 0) and np.all(input_data <= 1)
+    assert np.all(input_data >= 0)
+    assert np.all(input_data <= 1)
 
     # input should be in [0,1]
     # the res can be removed for further speed/memory improvement
@@ -28,14 +29,12 @@ def _quant_op(input_data, bit, need_bitmap=True, mode='original'):
     else:
         raise ValueError('mode should be either [original] or [modified]')
 
-    assert np.all(res >= 0) and np.all(res <= 1)
-
-    if need_bitmap:
-        return res, int_map
-    return res, None
+    assert np.all(res >= 0)
+    assert np.all(res <= 1)
+    return res, int_map
 
 
-def _intmap_encode(int_map, bitwidth=8):
+def _intmap_encode(int_map, bitwidth):
     """ compress the converted int_map to tesnor with fewer numbers"""
     # the int_map is assumed as a 4- or 3-dimensional np.array [b(optional),c,h,w]
     int_map = int_map.flatten()
@@ -58,7 +57,7 @@ def _intmap_encode(int_map, bitwidth=8):
     return new_array
 
 
-def _intmap_decode(input_data, orig_shape, bitwidth=8):
+def _intmap_decode(input_data, orig_shape, bitwidth):
     """ restore the compressed tensor """
     # the input is assumed as an 1-dimensional tensor / np.array
     # orig_shape represents the original tensor shape in format of tensor.shape [b(optional),c,h,w]
@@ -98,7 +97,7 @@ def _intmap_decode(input_data, orig_shape, bitwidth=8):
     return orig_tensor.reshape(orig_shape)
 
 
-def _intmap2float(int_map, bitwidth=8):
+def _intmap2float(int_map, bitwidth):
     """ used to restore the tesnor from intmap to float """
     scale = (1 << bitwidth) - 1
     return (int_map/scale).astype(np.float32)
@@ -114,7 +113,7 @@ def _uint8_to_uint32(tensor):
     return tensor.view('uint32')
 
 
-def tensor_encode(input_data, quant_bit=8):
+def tensor_encode(input_data, quant_bit):
     """
         The input to the encoder should be a torch.Tensor
         We first cast it to a np.array, then do everything else
@@ -130,7 +129,7 @@ def tensor_encode(input_data, quant_bit=8):
     scale_factor = input_data.max()
     rescale_input = input_data/scale_factor
     # quant
-    _, int_map = _quant_op(rescale_input, quant_bit, need_bitmap=True)
+    _, int_map = _quant_op(rescale_input, quant_bit)
     comm_tensor = _intmap_encode(int_map, quant_bit)
     # split uint32 into 4 uint8
     comm_tensor = _uint32_to_uint8(comm_tensor)
