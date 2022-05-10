@@ -36,32 +36,33 @@ class ViTTransformerShard(TransformerShard):
         self.layernorm = None
         self.classifier = None
 
-        print(f">>>> Model name {model_name}")
+        logging.debug(">>>> Model name: %s", model_name)
         if self.load_weight:
-            logging.info(f">>>> Load weight file {self.weights_file_name}")
+            logging.debug(">>>> Load weight file: %s", self.weights_file_name)
             with np.load(self.weights_file_name) as weights:
                 self._make_layer(weights)
         else:
             self._make_layer(None)
 
-        logging.info(f"======= Finish Build ViTTransformerShard{self.stage} ==========")
+        logging.info("======= Finish Build ViTTransformerShard%d ==========", self.stage)
 
     def _make_layer(self, weights):
         ## first Shard
         if self.is_first:
             self.embeddings = ViTEmbeddings(self.config)
-            print(">>>> Load embeddings layer for the first shard ")
+            logging.debug(">>>> Load embeddings layer for the first shard")
             if self.load_weight:
                 self._load_layer_weights(weights, 0, None, load_first = True, load_last=False, load_kernel = False, kernel_id=None)
-                print(">>>> Load weights for embeddings layer ")
+                logging.debug(">>>> Load weights for embeddings layer")
 
         current_layer_idx = self.start_layer
 
         ## first ununit part
         if self.start_layer %4 != 1 or (self.start_layer+3 > self.end_layer):
-            print(f">>>> For the first model part, load weight is {self.load_weight}:")
+            logging.debug(">>>> For the first model part, load weight is %s:", self.load_weight)
             for i in range(self.start_layer, min(self.end_layer, math.ceil(self.start_layer/4)*4)+1):
-                print(f"    Load the {i%4}-th operation ({self.operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
+                logging.debug("    Load the %d-th operation (%s) for %d-th vit layer",
+                              i%4, self.operators_list[(i-1)%4], math.ceil(i/4)-1)
                 layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
                 self.first_ops.append(layer)
             current_layer_idx = min(self.end_layer+1, math.ceil(self.start_layer/4)*4+1)
@@ -72,14 +73,16 @@ class ViTTransformerShard(TransformerShard):
             if self.load_weight:
                 layer = self._load_layer_weights(weights, math.ceil(current_layer_idx/4)-1, layer)
             self.vit_layers.append(layer)
-            print(f">>>> Load the {math.ceil(current_layer_idx/4)-1}-th ViT Layer, load weight is {self.load_weight}")
+            logging.debug(">>>> Load the %d-th ViT Layer, load weight is %s",
+                          math.ceil(current_layer_idx/4)-1, self.load_weight)
             current_layer_idx += 4
 
         ## last unit part
         if self.end_layer >= current_layer_idx:
-            print(f">>>> For the last model part, load weight is {self.load_weight}:")
+            logging.debug(">>>> For the last model part, load weight is %s:", self.load_weight)
         for i in range(current_layer_idx, self.end_layer+1):
-            print(f"    Load the {i%4}-th operation ({self.operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
+            logging.debug("    Load the %d-th operation (%s) for %d-th vit layer",
+                          i%4, self.operators_list[(i-1)%4], math.ceil(i/4)-1)
             layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
             if self.load_weight:
                 layer = self._load_layer_weights(weights, math.ceil(i/4)-1, layer, False, False, True, i%4)
@@ -89,20 +92,20 @@ class ViTTransformerShard(TransformerShard):
         if self.is_last:
             num_label = self.config.num_labels
             self.layernorm = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
-            print(">>>> Load layernorm for the last shard")
+            logging.debug(">>>> Load layernorm for the last shard")
             if self.model_name == 'google/vit-huge-patch14-224-in21k':
                 num_label = 21843
             self.classifier = nn.Linear(self.config.hidden_size, num_label) if self.config.num_labels > 0 else nn.Identity()
-            print(">>>> Load classifier for the last shard")
+            logging.debug(">>>> Load classifier for the last shard")
             if self.load_weight:
                 self._load_layer_weights(weights, 0, None, load_first = False, load_last=True, load_kernel = False, kernel_id=None)
-                print(">>>> Load weights for layernorm and last shard")
+                logging.debug(">>>> Load weights for layernorm and last shard")
 
 
         if self.load_weight:
-            print(">>>> Finish load weights")
+            logging.debug(">>>> Finish load weights")
         else:
-            print(">>>> Do NOT load weights")
+            logging.debug(">>>> Do NOT load weights")
 
     def _build_kernel(self, weights, kernel_id, vit_layer_id, load_weight=True):
         layers = nn.ModuleList()
@@ -136,22 +139,22 @@ class ViTTransformerShard(TransformerShard):
                 self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["Transformer/posembed_input/pos_embedding"])))
                 conv_weight = weights["embedding/kernel"]
                 # O, I, J, K = conv_weight.shape
-                # print(f"conv_shape is {O, I, J, K}, pe weight shape is {self.embeddings.patch_embeddings.projection.weight.shape}")
+                # logging.debug(f"conv_shape is {O, I, J, K}, pe weight shape is {self.embeddings.patch_embeddings.projection.weight.shape}")
                 # conv_weight = conv_weight.reshape(K,J,O,I)
                 conv_weight = conv_weight.transpose([3, 2, 0, 1])
                 self.embeddings.patch_embeddings.projection.weight.copy_(torch.from_numpy(conv_weight))
                 self.embeddings.patch_embeddings.projection.bias.copy_(torch.from_numpy(weights["embedding/bias"]))
-                # print(f">>>> Load embedding for the first shard")
+                # logging.debug(">>>> Load embedding for the first shard")
 
         if load_last:
             with torch.no_grad():
                 self.layernorm.weight.copy_(torch.from_numpy(weights["Transformer/encoder_norm/scale"]))
                 self.layernorm.bias.copy_(torch.from_numpy(weights["Transformer/encoder_norm/bias"]))
                 # head_kernel = np.transpose(weights["head/kernel"])
-                # print(f"classifier weight is {self.classifier.weight.shape}, head kernel weight shape is {head_kernel.shape}")
+                # logging.debug(f"classifier weight is {self.classifier.weight.shape}, head kernel weight shape is {head_kernel.shape}")
                 self.classifier.weight.copy_(torch.from_numpy(np.transpose(weights["head/kernel"])))
                 self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))
-                # print(f">>>> Load Layernorm, classifier for the last shard")
+                # logging.debug(">>>> Load Layernorm, classifier for the last shard")
 
 
         if not load_first and not load_last:
@@ -159,7 +162,7 @@ class ViTTransformerShard(TransformerShard):
                 if not load_kernel:
 
                     query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(hidden_size, hidden_size).t()
-                    print("query weight shape is ", query_weight.shape)
+                    logging.debug("query weight shape is %s", query_weight.shape)
                     key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(hidden_size, hidden_size).t()
                     value_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_V, "kernel")]).view(hidden_size, hidden_size).t()
                     out_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_OUT, "kernel")]).view(hidden_size, hidden_size).t()
@@ -193,7 +196,7 @@ class ViTTransformerShard(TransformerShard):
                     transformer_layer.layernorm_before.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_NORM, "bias")]))
                     transformer_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
                     transformer_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
-                    print(f"memory {self.process.memory_info().rss // 1000000} MB")
+                    logging.debug("memory %d MB", self.process.memory_info().rss // 1000000)
 
 
                 elif kernel_id == 1:
@@ -239,7 +242,7 @@ class ViTTransformerShard(TransformerShard):
     @torch.no_grad()
     def forward(self, x):
         with self._lock:
-            logging.debug(f"Start memory {self.process.memory_info().rss / 1000000} MB")
+            logging.debug("Start memory %d MB", self.process.memory_info().rss / 1000000)
             start = time.time()
             if self.is_first:
                 x = self.embeddings(x)
@@ -251,11 +254,11 @@ class ViTTransformerShard(TransformerShard):
                 x, skip = _forward_kernel(op, x, skip, (self.start_layer+i)%4)
 
             for i, layer in enumerate(self.vit_layers):
-                logging.debug(f"Before {i}: {self.process.memory_info().rss / 1000000} MB")
+                logging.debug("Before %d: %d MB", i, self.process.memory_info().rss / 1000000)
                 x = layer(x)[0]
-                logging.debug(f"After {i}: {self.process.memory_info().rss / 1000000} MB")
+                logging.debug("After %d: %d MB", i, self.process.memory_info().rss / 1000000)
                 skip = x
-            logging.debug(f"vit-layer memory {self.process.memory_info().rss / 1000000} MB")
+            logging.debug("vit-layer memory %d MB", self.process.memory_info().rss / 1000000)
 
             for i, op in enumerate(self.last_ops):
                 # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with _load_layer_weights()
@@ -264,21 +267,23 @@ class ViTTransformerShard(TransformerShard):
             if self.is_last:
                 x = self.layernorm(x)
                 x = self.classifier(x[:, 0, :])
-            logging.debug(f"Last memory {self.process.memory_info().rss / 1000000} MB")
+            logging.debug("Last memory %d MB", self.process.memory_info().rss / 1000000)
             if self.total_batch == 0:
                 self.batch_0_finish = time.time()
             else:
                 finish_batch_time = time.time()
                 self.total_data += x.shape[0]
                 tmp_throughput = self.total_data/(finish_batch_time-self.batch_0_finish)
-                logging.info(f"temporarily throughput is {tmp_throughput}")
+                logging.info("temporarily throughput is %f", tmp_throughput)
 
             end = time.time()
             self.total_time +=  (end - start)
             self.total_batch += 1
 
-        logging.info(f"Round {self.total_batch}: memory {self.process.memory_info().rss / 1000000} MB")
-        logging.info(f"Shard{self.stage} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
+        logging.info("Round %d: memory %d MB",
+                     self.total_batch, self.process.memory_info().rss / 1000000)
+        logging.info("Shard%d finishes %d microbatch, time is %f, total time is %f",
+                     self.stage, self.total_batch, end - start, self.total_time)
         if self.is_last:
             return x
         return x, skip

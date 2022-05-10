@@ -31,33 +31,34 @@ class BertTransformerShard(TransformerShard):
         super().__init__(stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight)
         self.embeddings = None
 
-        print(f">>>> Model name {model_name}")
+        logging.debug(">>>> Model name: %s", model_name)
         if self.load_weight:
-            logging.info(f">>>> Load weight file {self.weights_file_name}")
+            logging.debug(">>>> Load weight file: %s", self.weights_file_name)
             with np.load(self.weights_file_name) as weights:
                 self._make_layer(weights)
         else:
             self._make_layer(None)
 
-        logging.info(f"======= Finish Build BertTransformerShard{self.stage} ==========")
+        logging.info("======= Finish Build BertTransformerShard%d ==========", self.stage)
 
     def _make_layer(self, weights):
         ## first Shard
         if self.is_first:
             self.embeddings = BertEmbeddings(self.config)
             self.embeddings.eval()
-            print(">>>> Load embeddings layer for the first shard ")
+            logging.debug(">>>> Load embeddings layer for the first shard")
             if self.load_weight:
                 self._load_layer_weights(weights, 0, None, load_first = True, load_last=False, load_kernel = False, kernel_id=None)
-                print(">>>> Load weights for embeddings layer ")
+                logging.debug(">>>> Load weights for embeddings layer")
 
         current_layer_idx = self.start_layer
 
         ## first ununit part
         if self.start_layer %4 != 1 or (self.start_layer+3 > self.end_layer):
-            print(f">>>> For the first model part, load weight is {self.load_weight}:")
+            logging.debug(">>>> For the first model part, load weight is %s:", self.load_weight)
             for i in range(self.start_layer, min(self.end_layer, math.ceil(self.start_layer/4)*4)+1):
-                print(f"    Load the {i%4}-th operation ({self.operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
+                logging.debug("    Load the %d-th operation (%s) for %d-th vit layer",
+                              i%4, self.operators_list[(i-1)%4], math.ceil(i/4)-1)
                 layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
                 layer.eval()
                 self.first_ops.append(layer)
@@ -71,14 +72,16 @@ class BertTransformerShard(TransformerShard):
                 layer = self._load_layer_weights(weights, math.ceil(current_layer_idx/4)-1, layer)
             layer.eval()
             self.vit_layers.append(layer)
-            print(f">>>> Load the {math.ceil(current_layer_idx/4)-1}-th {self.model_name} Layer, load weight is {self.load_weight}")
+            logging.debug(">>>> Load the %d-th %s Layer, load weight is %s",
+                          math.ceil(current_layer_idx/4)-1, self.model_name, self.load_weight)
             current_layer_idx += 4
 
         ## last unit part
         if self.end_layer >= current_layer_idx:
-            print(f">>>> For the last model part, load weight is {self.load_weight}:")
+            logging.debug(">>>> For the last model part, load weight is %s:", self.load_weight)
         for i in range(current_layer_idx, self.end_layer+1):
-            print(f"    Load the {i%4}-th operation ({self.operators_list[(i-1)%4]}) for {math.ceil(i/4)-1}-th vit layer")
+            logging.debug("    Load the %d-th operation (%s) for %d-th vit layer",
+                          i%4, self.operators_list[(i-1)%4], math.ceil(i/4)-1)
             layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
             if self.load_weight:
                 layer = self._load_layer_weights(weights, math.ceil(i/4)-1, layer, False, False, True, i%4)
@@ -91,13 +94,13 @@ class BertTransformerShard(TransformerShard):
             self.bertpooler.eval()
             if self.load_weight:
                 self._load_layer_weights(weights, 0, None, load_first = False, load_last=True, load_kernel = False, kernel_id=None)
-                print(">>>> Load weights for layernorm and last shard")
+                logging.debug(">>>> Load weights for layernorm and last shard")
 
 
         if self.load_weight:
-            print(">>>> Finish load weights")
+            logging.debug(">>>> Finish load weights")
         else:
-            print(">>>> Do NOT load weights")
+            logging.debug(">>>> Do NOT load weights")
 
     def _build_kernel(self, weights, kernel_id, vit_layer_id, load_weight=True):
         layers = nn.ModuleList()
@@ -180,7 +183,7 @@ class BertTransformerShard(TransformerShard):
                     transformer_layer.output.dense.bias.copy_(dense_bias)
                     transformer_layer.output.LayerNorm.weight.copy_(layernorm_weight)
                     transformer_layer.output.LayerNorm.bias.copy_(layernorm_bias)
-                    print(f"memory {self.process.memory_info().rss // 1000000} MB")
+                    logging.debug("memory %d MB", self.process.memory_info().rss // 1000000)
 
                 elif kernel_id == 1:
 
@@ -255,12 +258,16 @@ class BertTransformerShard(TransformerShard):
                 finish_batch_time = time.time()
                 self.total_data += x.shape[0] ##14 #split_size
                 tmp_throughput = self.total_data/(finish_batch_time-self.batch_0_finish)
-                logging.info(f"total data is {self.total_data}, time is {finish_batch_time-self.batch_0_finish}, temporarily throughput is  {tmp_throughput} ")
+                logging.info("total data is %d, time is %f, temporarily throughput is %f",
+                             self.total_data, finish_batch_time - self.batch_0_finish,
+                             tmp_throughput)
 
         self.total_time +=  (end - start)
         self.total_batch += 1
-        logging.info(f"Round {self.total_batch}: memory {self.process.memory_info().rss // 1000000} MB")
-        logging.info(f"Shard{self.stage} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
+        logging.info("Round %d: memory %d MB",
+                     self.total_batch, self.process.memory_info().rss // 1000000)
+        logging.info("Shard%d finishes %d microbatch, time is %f, total time is %f",
+                     self.stage, self.total_batch, end - start, self.total_time)
         if self.is_last:
             return x
         return x, skip
