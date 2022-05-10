@@ -38,14 +38,12 @@ class DeiTTransformerShard(TransformerShard):
 
         print(f">>>> Model name {model_name}")
         if self.load_weight:
-            print(f">>>> Load weight file {self.weights_file_name}")
             logging.info(f">>>> Load weight file {self.weights_file_name}")
             with np.load(self.weights_file_name) as weights:
                 self._make_layer(weights)
         else:
             self._make_layer(None)
 
-        print(f"======= Finish Build DeiTTransformerShard{self.stage} ==========")
         logging.info(f"======= Finish Build DeiTTransformerShard{self.stage} ==========")
 
     def _make_layer(self, weights):
@@ -237,7 +235,7 @@ class DeiTTransformerShard(TransformerShard):
     @torch.no_grad()
     def forward(self, x):
         with self._lock:
-            logging.info(f"Start memory {self.process.memory_info().rss / 1000000} MB")
+            logging.debug(f"Start memory {self.process.memory_info().rss / 1000000} MB")
             start = time.time()
             if self.is_first:
                 x = self.embeddings(x)
@@ -249,11 +247,11 @@ class DeiTTransformerShard(TransformerShard):
                 x, skip = _forward_kernel(op, x, skip, (self.start_layer+i)%4)
 
             for i, layer in enumerate(self.vit_layers):
-                logging.info(f"Before {i}: {self.process.memory_info().rss / 1000000} MB")
+                logging.debug(f"Before {i}: {self.process.memory_info().rss / 1000000} MB")
                 x = layer(x)[0]
-                logging.info(f"After {i}: {self.process.memory_info().rss / 1000000} MB")
+                logging.debug(f"After {i}: {self.process.memory_info().rss / 1000000} MB")
                 skip = x
-            logging.info(f"vit-layer memory {self.process.memory_info().rss / 1000000} MB")
+            logging.debug(f"vit-layer memory {self.process.memory_info().rss / 1000000} MB")
 
             for i, op in enumerate(self.last_ops):
                 # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with _load_layer_weights()
@@ -262,22 +260,19 @@ class DeiTTransformerShard(TransformerShard):
             if self.is_last:
                 x = self.layernorm(x)
                 x = self.classifier(x[:, 0, :])
-            logging.info(f"Last memory {self.process.memory_info().rss / 1000000} MB")
+            logging.debug(f"Last memory {self.process.memory_info().rss / 1000000} MB")
             if self.total_batch == 0:
                 self.batch_0_finish = time.time()
             else:
                 finish_batch_time = time.time()
                 self.total_data += x.shape[0]
                 tmp_throughput = self.total_data/(finish_batch_time-self.batch_0_finish)
-                print(f"temporarily throughput is  {tmp_throughput} ")
                 logging.info(f"temporarily throughput is {tmp_throughput}")
 
             end = time.time()
             self.total_time +=  (end - start)
             self.total_batch += 1
 
-        print(f"Round {self.total_batch}: memory {self.process.memory_info().rss / 1000000} MB")
-        print(f"Shard{self.stage} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         logging.info(f"Round {self.total_batch}: memory {self.process.memory_info().rss / 1000000} MB")
         logging.info(f"Shard{self.stage} finishes {self.total_batch} microbatch, time is {end -start}, total time is {self.total_time}")
         if self.is_last:

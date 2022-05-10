@@ -4,6 +4,7 @@ import gc
 import logging
 import os
 import queue
+import sys
 import threading
 import time
 import numpy as np
@@ -18,7 +19,11 @@ import model_cfg
 
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
-logging.basicConfig(filename='runtime.log',level=logging.INFO)
+logging.basicConfig(filename='runtime.log', level=logging.DEBUG)
+console_hndlr = logging.StreamHandler(sys.stdout)
+console_hndlr.setFormatter(logging.Formatter(fmt='%(message)s'))
+console_hndlr.setLevel(logging.INFO)
+logging.getLogger().addHandler(console_hndlr)
 
 ## ground truth: Egyptian cat
 IMG_URL = 'http://images.cocodataset.org/val2017/000000039769.jpg'
@@ -61,7 +66,6 @@ results_counter = ThreadSafeCounter()
 # origin_model = ViTForImageClassification.from_pretrained(model_name)
 def handle_results(tensors):
     """Process result tensors"""
-    print(f"outputs is {tensors}")
     logging.info(f"outputs is {tensors}")
     results_counter.add(len(tensors))
     del tensors
@@ -276,7 +280,6 @@ def main():
     # torch.set_num_threads(parallel_threads)
     # torch.set_num_interop_threads(parallel_threads)
     torch.set_grad_enabled(False)
-    print(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
     logging.info(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
 
     #########################################################
@@ -349,7 +352,6 @@ def main():
                     tok_data = time.time()
                     latency = tok_data - tik_data
                     throughput = batch_size / latency
-                    print(f"Latency is {latency}, throughput is {throughput}")
                     logging.info(f"Latency is {latency}, throughput is {throughput}")
                     # will set stop_event on all other ranks
                     dist_ctx.cmd_broadcast(CMD_STOP)
@@ -385,7 +387,6 @@ def main():
                 tok_data = time.time()
                 latency = tok_data - tik_data
                 throughput = batch_size / latency
-                print(f"Latency is {latency}, throughput is {throughput}")
                 logging.info(f"Latency is {latency}, throughput is {throughput}")
     tok = time.time()
     print(f"Total program execution time = {tok - tik}")
