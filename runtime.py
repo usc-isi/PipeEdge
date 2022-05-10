@@ -66,12 +66,12 @@ results_counter = ThreadSafeCounter()
 # origin_model = ViTForImageClassification.from_pretrained(model_name)
 def handle_results(tensors):
     """Process result tensors"""
-    logging.info(f"outputs is {tensors}")
+    logging.info("outputs is %s", tensors)
     results_counter.add(len(tensors))
     del tensors
     gc.collect()
     # predicted_class_idx = tensors[0].argmax(-1).item()
-    # print("Predicted class:", origin_model.config.id2label[predicted_class_idx])
+    # logging.info("Predicted class: %s", origin_model.config.id2label[predicted_class_idx])
 
 
 def parse_yaml_sched(sched, hosts):
@@ -92,13 +92,14 @@ def parse_yaml_sched(sched, hosts):
                 try:
                     stage_ranks.append(hosts.index(host))
                 except ValueError:
-                    print(f"Scheduling: host not found in hosts list: {host}")
+                    logging.error("Scheduling: host not found in hosts list: %s", host)
                     raise
             else:
                 try:
                     stage_ranks.append(int(host))
                 except ValueError:
-                    print(f"Scheduling: 'hosts' not specified, failed to parse as rank: {host}")
+                    logging.error("Scheduling: 'hosts' not specified, failed to parse as rank: %s",
+                                  host)
                     raise
     return stage_layers, stage_ranks
 
@@ -112,24 +113,24 @@ def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, comm, mo
     """Get the pipeline schedule."""
     if partition:
         # User specified the stage layers
-        print("Scheduling: using user-defined partitioning")
+        logging.info("Scheduling: using user-defined partitioning")
         parts = [int(i) for i in partition.split(',')]
         stage_layers = [(parts[i], parts[i+1]) for i in range(0, len(parts), 2)]
         if quant:
             # User specified quantization
-            print("Scheduling: using user-defined quantization")
+            logging.info("Scheduling: using user-defined quantization")
             stage_quant = [int(i) for i in quant.split(',')]
         else:
             # No quantization by default
-            print("Scheduling: using default quantization")
+            logging.info("Scheduling: using default quantization")
             stage_quant = _get_default_quant(len(stage_layers))
         if rank_order:
             # User specified the stage ranks
-            print("Scheduling: using user-defined rank ordering")
+            logging.info("Scheduling: using user-defined rank ordering")
             stage_ranks = [int(i) for i in rank_order.split(',')]
         else:
             # Use natural rank order
-            print("Scheduling: using natural rank ordering")
+            logging.info("Scheduling: using natural rank ordering")
             stage_ranks = list(range(len(stage_layers)))
     elif quant:
         raise RuntimeError("Must specify partition with quantization")
@@ -137,7 +138,7 @@ def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, comm, mo
         raise RuntimeError("Must specify partition with rank stage ordering")
     elif world_size <= 1:
         # Degenerate case: everything runs locally
-        print("Scheduling: single-node execution (degenerate case)")
+        logging.info("Scheduling: single-node execution (degenerate case)")
         stage_layers = [(1, model_cfg.get_model_layers(model_name))]
         stage_quant = _get_default_quant(len(stage_layers))
         stage_ranks = [0]
@@ -146,7 +147,7 @@ def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, comm, mo
         # Set membership constraints: hosts in "s_dev_file" <= "hosts" <= hosts in "world" context
         # Since "hosts" is an implicit (rather than explicit) host-to-rank mapping, we enforce:
         #   "hosts" == hosts in "world" context
-        print("Scheduling: using scheduler algorithm")
+        logging.info("Scheduling: using scheduler algorithm")
         if hosts:
             hosts = hosts.split(',')
             if len(hosts) != world_size:
@@ -166,9 +167,9 @@ def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, comm, mo
         stage_layers, stage_ranks = parse_yaml_sched(sched, hosts)
         # no quantization support yet for automated scheduling
         stage_quant = _get_default_quant(len(stage_layers))
-    print(f"Scheduling: stage-to-layer mapping: {stage_layers}")
-    print(f"Scheduling: stage output quantization: {stage_quant}")
-    print(f"Scheduling: stage-to-rank mapping: {stage_ranks}")
+    logging.info("Scheduling: stage-to-layer mapping: %s", stage_layers)
+    logging.info("Scheduling: stage output quantization: %s", stage_quant)
+    logging.info("Scheduling: stage-to-rank mapping: %s", stage_ranks)
     return stage_layers, stage_quant, stage_ranks
 
 
@@ -199,15 +200,15 @@ stop_event = threading.Event()
 def handle_cmd(cmd, tensors):
     """Process received commands."""
     if cmd == CMD_STOP:
-        print('handle_cmd: stop')
+        logging.info("handle_cmd: stop")
         stop_event.set()
     elif cmd == CMD_SCHED:
-        print('handle_cmd: sched')
+        logging.info("handle_cmd: sched")
         assert isinstance(tensors, tuple)
         assert len(tensors) == 3 # stage_layers, stage_quant, stage_ranks
         sched_q.put((tensors[0].tolist(), tensors[1].tolist(), tensors[2].tolist()))
     else:
-        print(f'handle_cmd: Unknown command: {cmd}')
+        logging.warning("handle_cmd: Unknown command: %s", cmd)
 
 
 def main():
@@ -280,7 +281,9 @@ def main():
     # torch.set_num_threads(parallel_threads)
     # torch.set_num_interop_threads(parallel_threads)
     torch.set_grad_enabled(False)
-    logging.info(f"Use device: {device},  # parallel intra nodes threads: {torch.get_num_threads()}, # parallel inter nodes threads: {torch.get_num_interop_threads()}")
+    logging.debug("Use device: %s", device)
+    logging.debug("# parallel intra nodes threads: %d", torch.get_num_threads())
+    logging.debug("# parallel inter nodes threads: %d", torch.get_num_interop_threads())
 
     #########################################################
     #                 Configuration for Network             #
@@ -317,16 +320,16 @@ def main():
         with DistP2pContext(world_size, rank, handle_cmd) as dist_ctx:
             # Send or receive the schedule
             if rank == 0:
-                print("Broadcasting schedule")
+                logging.info("Broadcasting schedule")
                 dist_ctx.cmd_broadcast(CMD_SCHED,
                                        (torch.tensor(stage_layers),
                                         torch.tensor(stage_quant),
                                         torch.tensor(stage_ranks)))
             else:
-                print("Waiting for schedule")
+                logging.info("Waiting for schedule")
                 stage_layers, stage_quant, stage_ranks = sched_q.get()
-                print(f"Stage layers: {stage_layers}")
-                print(f"Stage ranks: {stage_ranks}")
+                logging.info("Stage layers: %s", stage_layers)
+                logging.info("Stage ranks: %s", stage_ranks)
             # Create model shard locally
             try:
                 stage = stage_ranks.index(rank)
@@ -352,7 +355,7 @@ def main():
                     tok_data = time.time()
                     latency = tok_data - tik_data
                     throughput = batch_size / latency
-                    logging.info(f"Latency is {latency}, throughput is {throughput}")
+                    logging.info("Latency is %f, throughput is %f", latency, throughput)
                     # will set stop_event on all other ranks
                     dist_ctx.cmd_broadcast(CMD_STOP)
                     stop_event.set()
@@ -360,23 +363,22 @@ def main():
                     stop_event.wait()
     else:
         # Initialize the distributed RPC context
-        # print(f"GLOO Threads: {num_worker_threads}")
+        logging.debug("GLOO Threads: %d", num_worker_threads)
         with DistRpcContext(world_size, rank, num_worker_threads) as dist_ctx:
             # Send or receive the schedule
             if rank == 0:
-                print("Broadcasting schedule")
+                logging.info("Broadcasting schedule")
                 dist_ctx.cmd_broadcast(handle_cmd, CMD_SCHED,
                                        (torch.tensor(stage_layers),
                                         torch.tensor(stage_quant),
                                         torch.tensor(stage_ranks)))
             else:
-                print("Waiting for schedule")
+                logging.info("Waiting for schedule")
                 stage_layers, stage_quant, stage_ranks = sched_q.get()
-                print(f"Stage layers: {stage_layers}")
-                print(f"Stage ranks: {stage_ranks}")
+                logging.info("Stage layers: %s", stage_layers)
+                logging.info("Stage ranks: %s", stage_ranks)
             if rank == stage_ranks[0]:
                 inputs = load_inputs(model_name, batch_size)
-                print("Run mastering \n")
                 # Create model shards on workers (requires distributed context to be initialized)
                 model = model_cfg.dist_rpc_module_factory(model_name, model_file, stage_ranks, stage_layers)
                 model.set_quant_bits(stage_quant)
@@ -387,9 +389,9 @@ def main():
                 tok_data = time.time()
                 latency = tok_data - tik_data
                 throughput = batch_size / latency
-                logging.info(f"Latency is {latency}, throughput is {throughput}")
+                logging.info("Latency is %f, throughput is %f", latency, throughput)
     tok = time.time()
-    print(f"Total program execution time = {tok - tik}")
+    logging.info("Total program execution time = %f", tok - tik)
 
 
 if __name__=="__main__":
