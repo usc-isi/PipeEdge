@@ -14,9 +14,9 @@ import torch
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 from edgepipe.comm.p2p import DistP2pContext, DistP2pPipelineStage
 from edgepipe.comm.rpc import DistRpcContext
+from edgepipe.quantization.hook import forward_hook_quant_encode, forward_pre_hook_quant_decode
 from edgepipe.sched.scheduler import sched_pipeline
 import model_cfg
-
 
 # torch.multiprocessing.set_sharing_strategy('file_system')
 logging.basicConfig(filename='runtime.log', level=logging.DEBUG)
@@ -343,6 +343,10 @@ def main():
                                                        stage_layers[stage][1], stage)
                 q_bits = torch.tensor((0 if stage == 0 else stage_quant[stage - 1], stage_quant[stage]))
                 model.register_buffer('quant_bits', q_bits)
+                if stage != len(partition) / 2 - 1:
+                    model.register_forward_hook(forward_hook_quant_encode)
+                if stage != 0:
+                    model.register_forward_pre_hook(forward_pre_hook_quant_decode)
             # Initialize the stage context
             with DistP2pPipelineStage(stage_ranks, stage, model, handle_results) as stage_ctx:
                 if stage == 0:
