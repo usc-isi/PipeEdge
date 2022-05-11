@@ -6,16 +6,19 @@ from typing import Dict, List
 import yaml
 
 
+logger = logging.getLogger(__name__)
+
+
 def _log_cpe(exc):
-    logging.info("Error running scheduler subprocess, return code: %d", {exc.returncode})
+    logger.info("Error running scheduler subprocess, return code: %d", {exc.returncode})
     stdout = exc.stdout.decode().strip()
     if stdout:
-        logging.info("stdout:")
-        logging.info(stdout)
+        logger.info("stdout:")
+        logger.info(stdout)
     stderr = exc.stderr.decode().strip()
     if stderr:
-        logging.error("stderr:")
-        logging.error(stderr)
+        logger.error("stderr:")
+        logger.error(stderr)
 
 
 def sched_pipeline(model_name, buffers_in, buffers_out, batch_size, dtype='torch.float32',
@@ -54,7 +57,7 @@ def sched_pipeline(model_name, buffers_in, buffers_out, batch_size, dtype='torch
         try:
             proc = subprocess.run([app_path] + args, capture_output=True, check=True)
         except FileNotFoundError:
-            logging.error('Could not locate sched-pipeline application - is it on your PATH?')
+            logger.error('Could not locate sched-pipeline application - is it on your PATH?')
             raise
         except subprocess.CalledProcessError as e:
             _log_cpe(e)
@@ -62,7 +65,7 @@ def sched_pipeline(model_name, buffers_in, buffers_out, batch_size, dtype='torch
 
     stderr = proc.stderr.decode().strip()
     if stderr:
-        logging.warning(stderr)
+        logger.warning(stderr)
     stdout = proc.stdout.decode()
     sched = yaml.safe_load(stdout)
     assert isinstance(sched, list)
