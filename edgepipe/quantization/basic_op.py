@@ -38,21 +38,18 @@ def _intmap_encode(int_map, bitwidth):
     """ compress the converted int_map to tesnor with fewer numbers"""
     # the int_map is assumed as a 4- or 3-dimensional np.array [b(optional),c,h,w]
     int_map = int_map.flatten()
-    size = np.prod(int_map.shape)
     # enc_ratio is the number of original values compressed into one single int32 value
     enc_ratio = int(32/bitwidth)
 
-    # the original tensor is compressed by enc_ratio times, initialized by minimal value
-    new_size = int(np.ceil(size/enc_ratio))
-    new_array = np.zeros(new_size, dtype=np.uint32)
-
     # store tensor into new_tensor
-    # e.g. original tensor with 6 values: [0], [1], [2], [3], [4], [5] (dtyep=int32)
-    # new tensor with 2 values: [3,2,1,0], [NULL,NULL,5,4] (enc_ratio=4, one int32 has 4 values)
-    for idx in range(size):
-        new_idx = idx//enc_ratio
-        new_bitshift = (idx % enc_ratio) * bitwidth
-        new_array[new_idx] += int_map[idx] << new_bitshift
+    # e.g. original tensor with 6 values: [0,1,2,3,4,5] (dtype=int32)
+    # new tensor with 2 values: [3,2,1,0], [5,4,NULL,NULL] (enc_ratio=4, one int32 has 4 values)
+    int_map_ext = np.append(int_map,
+                            np.repeat(0, (enc_ratio - len(int_map) % enc_ratio) % enc_ratio))
+    int_map_rs = np.reshape(int_map_ext, (-1, enc_ratio))
+    bitshift = np.array([(i % enc_ratio) * bitwidth for i in range(enc_ratio)], dtype=np.uint32)
+    int_map_shifted = np.left_shift(int_map_rs, bitshift)
+    new_array = np.bitwise_or.reduce(int_map_shifted, axis=1, dtype=np.uint32)
 
     return new_array
 
@@ -63,23 +60,18 @@ def _intmap_decode(input_data, orig_shape, bitwidth):
     # orig_shape represents the original tensor shape in format of tensor.shape [b(optional),c,h,w]
     enc_ratio = int(32/bitwidth)
     orig_size = np.prod(orig_shape, dtype=np.uint32)
-    orig_tensor = np.zeros(orig_size, dtype=np.uint32)
 
     # restore tensor into original_tensor
-    # e.g. new tensor with 2 values: [3,2,1,0], [NULL,NULL,5,4] (enc_ratio=4, one
+    # e.g. new tensor with 2 values: [3,2,1,0], [5,4,NULL,NULL] (enc_ratio=4, one
     #    uint32 will contain 4 uint8 values)
-    # original tensor should be 6 values: [0], [1], [2], [3], [4], [5] (dtyep=int32)
-    cnt = 0
-    alt_idx = 0
-    current_value = input_data[0]
-    for idx in range(orig_size):
-        if cnt == enc_ratio:
-            cnt = 0
-            alt_idx += 1
-            current_value = input_data[alt_idx]
-        orig_tensor[idx] = current_value % (1<<bitwidth)
-        current_value = current_value >> bitwidth
-        cnt += 1
+    # original tensor should be 6 values: [0,1,2,3,4,5] (dtype=int32)
+    data_exploded = np.repeat(input_data, enc_ratio)
+    data_rs = np.reshape(data_exploded, (-1, enc_ratio))
+    bitshift = np.array([(i % enc_ratio) * bitwidth for i in range(enc_ratio)], dtype=np.uint32)
+    data_shifted = np.right_shift(data_rs, bitshift)
+    data_flat = data_shifted.flatten()
+    orig_tensor = np.bitwise_and(data_flat, 2**bitwidth-1)
+    orig_tensor = orig_tensor[:orig_size]
 
     # # old version of implementation
     # for idx in range(orig_size):
