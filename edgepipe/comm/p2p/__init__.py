@@ -111,7 +111,36 @@ def _recv_tensor(src, tag_base):
     return tensor
 
 
-class TensorSendThread(threading.Thread):
+class AbstractTensorExchangeThread(threading.Thread):
+    """Abstract tensor exchange thread."""
+
+    def __init__(self):
+        super().__init__()
+        self._pre_hooks = []
+        self._post_hooks = []
+
+    def register_pre_hook(self, hook, args):
+        """Register hook with signature: `hook(*args)`."""
+        self._pre_hooks.append((hook, args))
+
+    def register_post_hook(self, hook, args):
+        """Register hook with signature: `hook(tensors, *args)`."""
+        self._post_hooks.append((hook, args))
+
+    def run(self):
+        """Still-abstract thread run method."""
+        raise NotImplementedError
+
+    def _call_pre_hooks(self):
+        for hook, args in self._pre_hooks:
+            hook(*args)
+
+    def _call_post_hooks(self, tensors):
+        for hook, args in self._post_hooks:
+            hook(tensors, *args)
+
+
+class TensorSendThread(AbstractTensorExchangeThread):
     """Thread for sending tensors."""
 
     def __init__(self, queue_out, dst_rank):
@@ -146,11 +175,13 @@ class TensorSendThread(threading.Thread):
             tensor_count = torch.tensor(_tensor_count, dtype=torch.int)
             dist.send(tensor=tensor_count, dst=self._dst_rank, tag=TAG_BASE_DATA+TAG_TENSOR_COUNT)
             # NOTE: could optimize by only sending dtype once (it's the same for all tensors)
+            self._call_pre_hooks()
             for tensor in tensors:
                 _send_tensor(tensor, self._dst_rank, TAG_BASE_DATA)
+            self._call_post_hooks(tensors)
 
 
-class TensorRecvThread(threading.Thread):
+class TensorRecvThread(AbstractTensorExchangeThread):
     """Thread for receiving tensors."""
 
     def __init__(self, queue_in, src_rank):
@@ -178,9 +209,11 @@ class TensorRecvThread(threading.Thread):
             _tensor_count = int(tensor_count)
             assert _tensor_count > 0
             tensors = ()
+            self._call_pre_hooks()
             for _ in range(_tensor_count):
                 tensor = _recv_tensor(self._src_rank, TAG_BASE_DATA)
                 tensors += (tensor,)
+            self._call_post_hooks(tensors)
             if _tensor_count == 1:
                 # At this point, we don't know whether the original data type was a Tensor or Tuple[Tensor] w/ len=1.
                 # We'd have to include that information in a separate message to know for sure.
@@ -322,6 +355,30 @@ class DistP2pPipelineStage():
         for thr in self._threads.values():
             thr.stop()
             thr.join()
+
+    def register_recv_pre_hook(self, hook, args):
+        """Register a pre hook for tensor receive with signature: `hook(*args)`."""
+        thr = self._threads.get('recv')
+        if thr is not None:
+            thr.register_pre_hook(hook, args)
+
+    def register_recv_post_hook(self, hook, args):
+        """Register a post hook for tensor receive with signature: `hook(tensors, *args)`."""
+        thr = self._threads.get('recv')
+        if thr is not None:
+            thr.register_post_hook(hook, args)
+
+    def register_send_pre_hook(self, hook, args):
+        """Register a pre hook for tensor send with signature: `hook(*args)`."""
+        thr = self._threads.get('send')
+        if thr is not None:
+            thr.register_pre_hook(hook, args)
+
+    def register_send_post_hook(self, hook, args):
+        """Register a post hook for tensor send with signature: `hook(tensors, *args)`."""
+        thr = self._threads.get('send')
+        if thr is not None:
+            thr.register_post_hook(hook, args)
 
     def __enter__(self):
         self.init()
