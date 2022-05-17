@@ -389,6 +389,8 @@ def main():
                 # Create model shards on workers (requires distributed context to be initialized)
                 model = model_cfg.dist_rpc_module_factory(model_name, model_file, stage_ranks, stage_layers)
                 model.set_quant_bits(stage_quant)
+                model.rpc_register_forward_hook(forward_hook_quant_encode, last=False)
+                model.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode, first=False)
                 tik_data = time.time()
                 # this call is synchronous - it won't return until it has the results
                 outputs = model(inputs, split_size=ubatch_size)

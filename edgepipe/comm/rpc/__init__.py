@@ -3,7 +3,6 @@ import torch
 from torch import nn
 from torch.distributed import rpc
 from .. import DistContext
-from ...quantization.hook import forward_hook_quant_encode, forward_pre_hook_quant_decode
 
 
 class DistRpcContext(DistContext):
@@ -76,8 +75,6 @@ class DistRpcModule(nn.Module):
     def _register_hooks(self):
         """Register hooks."""
         self.rpc_register_forward_pre_hook(forward_pre_hook_rpc)
-        self.rpc_register_forward_hook(forward_hook_quant_encode, last=False)
-        self.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode, first=False)
 
     def forward(self, xs, **kwargs):
         """Configure and run remote stages using RPC."""
