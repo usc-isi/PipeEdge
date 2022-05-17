@@ -61,18 +61,23 @@ class DistRpcModule(nn.Module):
             hook_futures.append(rref.rpc_async().register_buffer('quant_bits', q_bits))
         torch.futures.wait_all(hook_futures)
 
+    def rpc_register_forward_pre_hook(self, hook, first=True):
+        """Register forward pre hook."""
+        rrefs = self._rref_list if first else self._rref_list[1:]
+        hook_futures = [rref.rpc_async().register_forward_pre_hook(hook) for rref in rrefs]
+        torch.futures.wait_all(hook_futures)
+
+    def rpc_register_forward_hook(self, hook, last=True):
+        """Register forward hook."""
+        rrefs = self._rref_list if last else self._rref_list[:-1]
+        hook_futures = [rref.rpc_async().register_forward_hook(hook) for rref in rrefs]
+        torch.futures.wait_all(hook_futures)
+
     def _register_hooks(self):
         """Register hooks."""
-        hook_futures = [rref.rpc_async().register_forward_pre_hook(forward_pre_hook_rpc)
-                        for rref in self._rref_list]
-        torch.futures.wait_all(hook_futures)
-        hook_encoder = [rref.rpc_async().register_forward_hook(forward_hook_quant_encode)
-                        for rref in self._rref_list[:-1]]
-        torch.futures.wait_all(hook_encoder)
-        hook_decoder = [rref.rpc_async().register_forward_pre_hook(forward_pre_hook_quant_decode)
-                        for rref in self._rref_list[1:]]
-        torch.futures.wait_all(hook_decoder)
-
+        self.rpc_register_forward_pre_hook(forward_pre_hook_rpc)
+        self.rpc_register_forward_hook(forward_hook_quant_encode, last=False)
+        self.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode, first=False)
 
     def forward(self, xs, **kwargs):
         """Configure and run remote stages using RPC."""
