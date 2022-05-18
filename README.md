@@ -66,6 +66,12 @@ python tools/bert_save_weights.py
 python tools/deit_save_weights.py
 ```
 
+### Optional dependencies:
+
+System dependencies required for runtime monitoring:
+
+* [EnergyMon](https://github.com/energymon/energymon) - with a system-appropriate "default" library (which may have transitive dependencies)
+
 
 ## Usage
 
