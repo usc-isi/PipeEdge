@@ -6,10 +6,26 @@ It includes an automatic partition scheduler which maps model layers to devices 
 
 ## Prerequisites
 
-`Python >= 3.7.3` is recommended (based on evaluation platforms).
-Might support `Python >= 3.6.1` (based on minimum PyTorch version).
+System dependencies:
 
-We recommend using a Python virtual environment (`virtualenv`), e.g., on Debian or Debian-based Linux (including Ubuntu):
+* Python >= 3.7
+* Compiler with C++17 support
+* CMake >= 3.8 (for C++17 support)
+* [yaml-cpp](https://github.com/jbeder/yaml-cpp) >= 0.6.0
+
+On MacOS:
+
+```sh
+brew install cmake yaml-cpp
+```
+
+On Debian (>= buster) or Debian-based Linux (including Ubuntu >= 20.04):
+
+```sh
+sudo apt-get install build-essential cmake libyaml-cpp-dev
+```
+
+We recommend using a Python virtual environment (`virtualenv`), e.g., on Debian-based Linux:
 
 ```sh
 sudo apt-get install python3-venv
@@ -28,11 +44,11 @@ python3 -m venv .venv
 . .venv/bin/activate
 ```
 
-Install Python package dependencies with:
+Install the development package and Python package dependencies with:
 
 ```sh
 pip install -U pip
-pip install -r requirements.txt
+pip install -e .
 ```
 
 Download ViT weight files from [Google Cloud](https://console.cloud.google.com/storage/browser/vit_models;tab=objects?pageState=(%22StorageObjectListTable%22:(%22f%22:%22%255B%255D%22))&prefix=&forceOnObjectsSortingFiltering=false), e.g.:
@@ -101,7 +117,7 @@ partition = [1,4,5,8,9,20,21,48]
 
 In summary, the `sched-pipeline` scheduling application uses three input YAML files to map model partitions to devices (hosts).
 Automated profiling helps produce two of these files; the third lists available hosts and is straightforward to create for your deployment environment.
-For detailed instructions and documentation, see [README_Profiler.md](README_Profiler.md) and [README_Scheduler.md](README_Scheduler.md), and note that you will need to compile the scheduler before it can be used.
+For detailed instructions and documentation, see [README_Profiler.md](README_Profiler.md) and [README_Scheduler.md](README_Scheduler.md).
 
 Point `runtime.py` to the YAML files using the options `-sm/--sched-models-file`, `--sdt/--sched-dev-types-file`, and `-sd/--sched-dev-file`.
 The runtime passes these through to the previously compiled scheduler application, along with other configurations like the model name and microbatch size.

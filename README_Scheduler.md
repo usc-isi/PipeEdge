@@ -1,6 +1,8 @@
 # Scheduler
 
-The `sched-pipeline` scheduling application requires inputs that describe: (1) models, (2) device types, and (3) available devices.
+The `sched-pipeline` scheduling application is compiled and installed when the Python package is installed.
+
+Running the application requires inputs that describe: (1) models, (2) device types, and (3) available devices.
 For simplicity, we represent this information in YAML files, which are essentially hierarchies of maps, lists, and primitive types.
 
 The information in these files is derived from model and device profiling - see [README_Profiler.md](README_Profiler.md).
@@ -10,14 +12,12 @@ File (3) maps device type names to concrete hosts and is straightforward to crea
 
 ## Usage
 
-The `sched-pipeline` application must first be compiled - see [partition/README.md](partition/README.md).
-
 By default, `sched-pipeline` produces a schedule based on the input YAML files described below.
 
 For detailed usage instructions, see the help output:
 
 ```sh
-./partition/build/sched-pipeline -h
+sched-pipeline -h
 ```
 
 ### Example Schedule
@@ -262,4 +262,18 @@ RCC-VE-C2558:
 - rcc-1
 - rcc-2
 - rcc-3
+```
+
+
+## Development Notes
+
+You may build the scheduler application manually, e.g., to experiment with it in isolation, but it will not be found by the runtime scheduler until the Python package is rebuilt/reinstalled.
+
+To build manually:
+
+```sh
+mkdir partition/build
+cd partition/build
+cmake ..
+cmake --build .
 ```
