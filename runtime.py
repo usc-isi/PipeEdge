@@ -155,16 +155,10 @@ def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, comm, mo
                 raise RuntimeError("Specified hosts count != world size")
         # comm='rpc' is _presumed_ to not use additional buffers (or queues), so set buffers=1
         buffers = 2 if comm == 'p2p' else 1
-        # the user can build the binary anywhere, but this is where we document to do it
-        app = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           'partition', 'build', 'sched-pipeline')
-        if os.name == 'nt':
-            app += '.exe'
         sched = sched_pipeline(model_name, buffers, buffers, microbatch_size,
                                models_file=s_models_file,
                                dev_types_file=s_dev_types_file,
-                               dev_file=s_dev_file,
-                               app_paths=[app])
+                               dev_file=s_dev_file)
         stage_layers, stage_ranks = parse_yaml_sched(sched, hosts)
         # no quantization support yet for automated scheduling
         stage_quant = _get_default_quant(len(stage_layers))
