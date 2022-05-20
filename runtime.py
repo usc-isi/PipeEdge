@@ -382,7 +382,9 @@ def main():
                 inputs = load_inputs(model_name, batch_size)
                 # Create model shards on workers (requires distributed context to be initialized)
                 model = model_cfg.dist_rpc_module_factory(model_name, model_file, stage_ranks, stage_layers)
-                model.set_quant_bits(stage_quant)
+                q_bits = [torch.tensor((0 if s == 0 else stage_quant[s - 1], stage_quant[s]))
+                          for s in range(len(stage_quant))]
+                model.rpc_register_buffer('quant_bits', q_bits)
                 model.rpc_register_forward_hook(forward_hook_quant_encode, last=False)
                 model.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode, first=False)
                 tik_data = time.time()
