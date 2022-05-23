@@ -1,0 +1,35 @@
+name: Run Python Tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # TODO: Re-add '3.7' when we fix our build support for it
+        python-version: [ '3.8', '3.9', '3.10' ]
+    name: Python ${{ matrix.python-version }} Test
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Python
+        uses: actions/setup-python@v1
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+      - name: Install native dependencies
+        # cmake and compiler already installed
+        run: |
+          sudo apt-get install -y libyaml-cpp-dev
+      - name: Install Python dependencies and package
+        run: |
+          pip install -U pip
+          pip install . -v
+      - name: Run tests
+        run: |
+          python -m unittest -v 
