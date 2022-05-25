@@ -234,11 +234,17 @@ class BertTransformerShard(TransformerShard):
     def forward(self, x):
         with self._lock:
             start = time.time()
+            if isinstance(x, tuple):
+                assert len(x) == 2
+                x, skip = x[0], x[1]
+            else:
+                skip = x
+            assert isinstance(x, torch.Tensor)
+            assert isinstance(skip, torch.Tensor)
+
             if self.is_first:
                 x = self.embeddings(x)
                 skip = x
-            else:
-                x, skip = x[0], x[1]
 
             for i, op in enumerate(self.first_ops):
                 x, skip = _forward_kernel(op, x, skip, (self.start_layer+i)%4)
@@ -271,6 +277,6 @@ class BertTransformerShard(TransformerShard):
                      self.total_batch, self.process.memory_info().rss // 1000000)
         logger.info("Shard%d finishes %d microbatch, time is %f, total time is %f",
                      self.stage, self.total_batch, end - start, self.total_time)
-        if self.is_last:
+        if self.end_layer % 4 == 0:
             return x
         return x, skip
