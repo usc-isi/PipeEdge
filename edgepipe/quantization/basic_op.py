@@ -111,7 +111,7 @@ def tensor_encode(input_data, quant_bit):
         We first cast it to a np.array, then do everything else
     """
     if quant_bit == 0:
-        return input_data, torch.tensor(input_data.shape), torch.tensor(1.0), torch.tensor(0.0)
+        return [input_data, torch.tensor(input_data.shape), torch.tensor(1.0), torch.tensor(0.0)]
 
     input_data = input_data.numpy()
     shape = input_data.shape
