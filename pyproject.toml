@@ -21,7 +21,10 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["py-build-cmake>=0.0.9"]
+# Work around current py-build-cmake issues (as of 0.0.10):
+# Support Python 3.7: https://github.com/tttapa/py-build-cmake/issues/5
+# Enforce min cmake version for CLI compatibility: https://github.com/tttapa/py-build-cmake/issues/6
+requires = ["cmake>=3.15", "py-build-cmake @ git+https://github.com/cimes-isi/py-build-cmake.git@py3.7"]
 build-backend = "py_build_cmake.build"
 
 [tool.py-build-cmake.module]
