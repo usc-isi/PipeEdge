@@ -1,4 +1,6 @@
 """RPC communication module."""
+import threading
+from typing import Any, Callable
 import torch
 from torch import nn
 from torch.distributed import rpc
@@ -39,9 +41,63 @@ class DistRpcContext(DistContext):
         torch.futures.wait_all(futs)
 
 
-def forward_pre_hook_rpc(_module, x):
-    """Copy forward input data from the prior stage as needed."""
-    return tuple(_x.to_here() for _x in x)
+class DistRpcPipelineStage(nn.Module):
+    """Wrap a module that is not RPC-aware to manage threading and memory."""
+    # NOTE: message ordering is NOT enforced!
+    # pylint: disable=too-many-instance-attributes
+
+    def __init__(self, module_cls, module_init_args, module_init_kwargs):
+        super().__init__()
+        # _sem_fwd limits RPC threads in forward(), and thus data memory requirements (in + out).
+        # _sem_mod limits Module thread parallelism, and thus processing memory requirements.
+        # If each stage is configured for single-thread Module processing, then N=1.
+        # Ideally, for _sem_mod value=N:
+        # (1) N inputs are being or have been received (prior to forward() or waiting on _sem_mod)
+        # (2) N inputs are processing (acquired _sem_mod)
+        # (3) N outputs are sending or waiting to send (released _sem_mod)
+        # More generally, however, the local stage may be backed up at any of these three steps,
+        # depending on its performance relative to other stages and network conditions.
+        self._sem_fwd = threading.Semaphore(value=3) # value = 3*N
+        self._sem_mod = threading.Semaphore(value=1) # value = N
+        self._module = module_cls(*module_init_args, **module_init_kwargs)
+        self._next_rref = None
+        self._results_cb = None
+        # Redirect some Module methods to the wrapped module (extend as needed)
+        self.register_buffer = self._module.register_buffer
+        self.register_forward_hook = self._module.register_forward_hook
+        self.register_forward_pre_hook = self._module.register_forward_pre_hook
+
+    def set_next(self, stage_rref: rpc.RRef):
+        """Set the RRef of the next pipeline stage."""
+        self._next_rref = stage_rref
+
+    def set_results_callback(self, results_cb: Callable[[Any], None]):
+        """Set the results callback function on `next`, for use only by the last stage."""
+        self._results_cb = results_cb
+
+    def wait_for_ready(self):
+        """Wait for this stage to be ready to receive data - MUST be called from previous stage."""
+        # NOTE: This approach breaks down if the previous stage fails to send data afterward.
+        self._sem_fwd.acquire() # pylint: disable=consider-using-with
+
+    def forward(self, inputs: Any) -> None:
+        """Wrap the module's callable method."""
+        try:
+            with self._sem_mod:
+                outputs = self._module(inputs)
+            if self._results_cb is None:
+                # Sending must be asynchronous, otherwise we lose pipeline parallelism.
+                # However, don't try to send until the next stage is ready.
+                # If we were to initiate the async send (and then release _sem_fwd) too soon,
+                # outbound data could get backlogged in this stage when the next stage is slow.
+                self._next_rref.rpc_sync().wait_for_ready()
+                self._next_rref.rpc_async().__call__(outputs)
+            else:
+                # There's no synchronization with the results handler, just send the data.
+                rpc.rpc_sync(self._next_rref.owner(), self._results_cb, args=(outputs,))
+        finally:
+            # Now release so that another microbatch may be received.
+            self._sem_fwd.release()
 
 
 class DistRpcModule(nn.Module):
@@ -70,18 +126,17 @@ class DistRpcModule(nn.Module):
         hook_futures = [rref.rpc_async().register_forward_hook(hook) for rref in rrefs]
         torch.futures.wait_all(hook_futures)
 
-    def _register_hooks(self):
-        """Register hooks."""
-        self.rpc_register_forward_pre_hook(forward_pre_hook_rpc)
+    def _link_pipeline(self, results_cb: Callable[[Any], None]):
+        """Must be called by child classes after populating `_rref_list` and before `forward()`."""
+        n_stages = len(self._rref_list)
+        futs = [self._rref_list[i].rpc_async().set_next(self._rref_list[(i + 1) % n_stages])
+                for i in range(n_stages)]
+        futs.append(self._rref_list[-1].rpc_async().set_results_callback(results_cb))
+        torch.futures.wait_all(futs)
 
-    def forward(self, xs, **kwargs):
-        """Configure and run remote stages using RPC."""
-        split_size = kwargs.get('split_size', len(xs))
-        out_futures = []
-        for x in iter(xs.split(split_size, dim=0)):
-            x_rref = rpc.RRef(x)
-            for rref in self._rref_list[:-1]:
-                x_rref = rref.remote().__call__(x_rref)
-            y_rref = self._rref_list[-1].rpc_async().__call__(x_rref)
-            out_futures.append(y_rref)
-        return torch.cat(torch.futures.wait_all(out_futures))
+    def forward(self, inputs: Any, **kwargs) -> None:
+        """Insert data into the front of the pipeline."""
+        split_size = kwargs.get('split_size', len(inputs))
+        for ubatch in iter(inputs.split(split_size, dim=0)):
+            self._rref_list[0].rpc_sync().wait_for_ready()
+            self._rref_list[0].rpc_async().__call__(ubatch)

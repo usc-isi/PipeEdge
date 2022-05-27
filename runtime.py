@@ -153,9 +153,13 @@ def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, comm, mo
             hosts = hosts.split(',')
             if len(hosts) != world_size:
                 raise RuntimeError("Specified hosts count != world size")
-        # comm='rpc' is _presumed_ to not use additional buffers (or queues), so set buffers=1
-        buffers = 2 if comm == 'p2p' else 1
-        sched = sched_pipeline(model_name, buffers, buffers, microbatch_size,
+        # Scheduler assumes 1 processing thread and accounts for those in/out buffers independently.
+        # Then for both data receive and send, the design intent for the worst case is:
+        # 1 buffer for in-flight data exchanges, 1 buffer for queued (P2P) or blocked (RPC) data.
+        # So, let both 'in' and 'out' buffer counts = 2.
+        # P2P enforces this with threads for recv/process/send, and queues between the 3 threads.
+        # RPC threads each do recv/process/send for a microbatch, but are constrained in number (3).
+        sched = sched_pipeline(model_name, 2, 2, microbatch_size,
                                models_file=s_models_file,
                                dev_types_file=s_dev_types_file,
                                dev_file=s_dev_file)
@@ -381,16 +385,18 @@ def main():
             if rank == stage_ranks[0]:
                 inputs = load_inputs(model_name, batch_size)
                 # Create model shards on workers (requires distributed context to be initialized)
-                model = model_cfg.dist_rpc_module_factory(model_name, model_file, stage_ranks, stage_layers)
+                model = model_cfg.dist_rpc_module_factory(model_name, model_file, stage_ranks,
+                                                          stage_layers, handle_results)
                 q_bits = [torch.tensor((0 if s == 0 else stage_quant[s - 1], stage_quant[s]))
                           for s in range(len(stage_quant))]
                 model.rpc_register_buffer('quant_bits', q_bits)
                 model.rpc_register_forward_hook(forward_hook_quant_encode, last=False)
                 model.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode, first=False)
                 tik_data = time.time()
-                # this call is synchronous - it won't return until it has the results
-                outputs = model(inputs, split_size=ubatch_size)
-                handle_results(outputs)
+                # this call is asynchronous - wait for results to get end-to-end timings
+                start_count = results_counter.value
+                model(inputs, split_size=ubatch_size)
+                results_counter.wait_gte(start_count + len(inputs))
                 tok_data = time.time()
                 latency = tok_data - tik_data
                 throughput = batch_size / latency
