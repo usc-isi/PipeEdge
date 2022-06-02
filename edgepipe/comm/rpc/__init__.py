@@ -1,6 +1,6 @@
 """RPC communication module."""
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, List, Type, Union
 import torch
 from torch import nn
 from torch.distributed import rpc
@@ -46,8 +46,13 @@ class DistRpcPipelineStage(nn.Module):
     # NOTE: message ordering is NOT enforced!
     # pylint: disable=too-many-instance-attributes
 
-    def __init__(self, module_cls, module_init_args, module_init_kwargs):
+    def __init__(self, module_cls: Type[nn.Module], module_args: tuple=None,
+                 module_kwargs: dict=None):
         super().__init__()
+        if module_args is None:
+            module_args = ()
+        if module_kwargs is None:
+            module_kwargs = {}
         # _sem_fwd limits RPC threads in forward(), and thus data memory requirements (in + out).
         # _sem_mod limits Module thread parallelism, and thus processing memory requirements.
         # If each stage is configured for single-thread Module processing, then N=1.
@@ -59,7 +64,7 @@ class DistRpcPipelineStage(nn.Module):
         # depending on its performance relative to other stages and network conditions.
         self._sem_fwd = threading.Semaphore(value=3) # value = 3*N
         self._sem_mod = threading.Semaphore(value=1) # value = N
-        self._module = module_cls(*module_init_args, **module_init_kwargs)
+        self._module = module_cls(*module_args, **module_kwargs)
         self._next_rref = None
         self._results_cb = None
         # Redirect some Module methods to the wrapped module (extend as needed)
@@ -100,12 +105,19 @@ class DistRpcPipelineStage(nn.Module):
             self._sem_fwd.release()
 
 
-class DistRpcModule(nn.Module):
-    """Parent class for distributed RPC modules."""
+def pipeline_stage_factory(dest: Union[int, rpc.WorkerInfo, str], module_cls: Type[nn.Module],
+                           module_args: tuple=None, module_kwargs: dict=None) -> rpc.RRef:
+    """Create a `DistRpcPipelineStage` on a remote."""
+    return rpc.remote(dest, DistRpcPipelineStage, args=(module_cls, module_args, module_kwargs))
 
-    def __init__(self):
+
+class DistRpcPipeline(nn.Module):
+    """A distributed RPC pipeline which links `DistRpcPipelineStage` RRefs."""
+
+    def __init__(self, stage_rrefs: List[rpc.RRef], results_cb: Callable[[Any], None]):
         super().__init__()
-        self._rref_list = []
+        self._rref_list = stage_rrefs
+        self._link_pipeline(results_cb)
 
     def rpc_register_buffer(self, name, tensors):
         """Add buffers to RPC modules."""
@@ -127,7 +139,6 @@ class DistRpcModule(nn.Module):
         torch.futures.wait_all(hook_futures)
 
     def _link_pipeline(self, results_cb: Callable[[Any], None]):
-        """Must be called by child classes after populating `_rref_list` and before `forward()`."""
         n_stages = len(self._rref_list)
         futs = [self._rref_list[i].rpc_async().set_next(self._rref_list[(i + 1) % n_stages])
                 for i in range(n_stages)]
