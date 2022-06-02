@@ -1,5 +1,4 @@
 """Transformers module."""
-import threading
 import os
 import psutil
 from torch import nn
@@ -25,18 +24,11 @@ class TransformerShard(nn.Module):
                                 "MLP-2 + residuel Connection" ]
         self.process = psutil.Process(os.getpid())
         self.config = AutoConfig.from_pretrained(model_name)
-        self._lock = threading.Lock()
 
         ## operations/transformer layers set
         self.first_ops = nn.ModuleList()
         self.vit_layers = nn.ModuleList()
         self.last_ops = nn.ModuleList()
-
-        # profiling
-        self.total_time = 0
-        self.total_batch = 0
-        self.total_data = 0
-        self.batch_0_finish = 0
 
     def forward(self, x):
         """Still-abstract forward function."""

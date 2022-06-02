@@ -244,55 +244,42 @@ class ViTTransformerShard(TransformerShard):
 
     @torch.no_grad()
     def forward(self, x):
-        with self._lock:
-            logger.debug("Start memory %d MB", self.process.memory_info().rss / 1000000)
-            start = time.time()
-            if isinstance(x, tuple):
-                assert len(x) == 2
-                x, skip = x[0], x[1]
-            else:
-                skip = x
-            assert isinstance(x, torch.Tensor)
-            assert isinstance(skip, torch.Tensor)
+        logger.debug("Start memory %d MB", self.process.memory_info().rss / 1000000)
+        start = time.time()
+        if isinstance(x, tuple):
+            assert len(x) == 2
+            x, skip = x[0], x[1]
+        else:
+            skip = x
+        assert isinstance(x, torch.Tensor)
+        assert isinstance(skip, torch.Tensor)
 
-            if self.is_first:
-                x = self.embeddings(x)
-                skip = x
+        if self.is_first:
+            x = self.embeddings(x)
+            skip = x
 
-            for i, op in enumerate(self.first_ops):
-                x, skip = _forward_kernel(op, x, skip, (self.start_layer+i)%4)
+        for i, op in enumerate(self.first_ops):
+            x, skip = _forward_kernel(op, x, skip, (self.start_layer+i)%4)
 
-            for i, layer in enumerate(self.vit_layers):
-                logger.debug("Before %d: %d MB", i, self.process.memory_info().rss / 1000000)
-                x = layer(x)[0]
-                logger.debug("After %d: %d MB", i, self.process.memory_info().rss / 1000000)
-                skip = x
-            logger.debug("vit-layer memory %d MB", self.process.memory_info().rss / 1000000)
+        for i, layer in enumerate(self.vit_layers):
+            logger.debug("Before %d: %d MB", i, self.process.memory_info().rss / 1000000)
+            x = layer(x)[0]
+            logger.debug("After %d: %d MB", i, self.process.memory_info().rss / 1000000)
+            skip = x
+        logger.debug("vit-layer memory %d MB", self.process.memory_info().rss / 1000000)
 
-            for i, op in enumerate(self.last_ops):
-                # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with _load_layer_weights()
-                x, skip = _forward_kernel(op, x, skip, (i+1)%4)
+        for i, op in enumerate(self.last_ops):
+            # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with _load_layer_weights()
+            x, skip = _forward_kernel(op, x, skip, (i+1)%4)
 
-            if self.is_last:
-                x = self.layernorm(x)
-                x = self.classifier(x[:, 0, :])
-            logger.debug("Last memory %d MB", self.process.memory_info().rss / 1000000)
-            if self.total_batch == 0:
-                self.batch_0_finish = time.time()
-            else:
-                finish_batch_time = time.time()
-                self.total_data += x.shape[0]
-                tmp_throughput = self.total_data/(finish_batch_time-self.batch_0_finish)
-                logger.info("temporarily throughput is %f", tmp_throughput)
+        if self.is_last:
+            x = self.layernorm(x)
+            x = self.classifier(x[:, 0, :])
+        end = time.time()
 
-            end = time.time()
-            self.total_time +=  (end - start)
-            self.total_batch += 1
+        logger.info("Shard%d: computed microbatch in: %f sec", self.stage, end - start)
+        logger.info("Shard%d: memory: %d MB", self.stage, self.process.memory_info().rss / 1000000)
 
-        logger.info("Round %d: memory %d MB",
-                     self.total_batch, self.process.memory_info().rss / 1000000)
-        logger.info("Shard%d finishes %d microbatch, time is %f, total time is %f",
-                     self.stage, self.total_batch, end - start, self.total_time)
         if self.end_layer % 4 == 0:
             return x
         return x, skip
