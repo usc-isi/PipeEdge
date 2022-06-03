@@ -111,7 +111,7 @@ def pipeline_stage_factory(dest: Union[int, rpc.WorkerInfo, str], module_cls: Ty
     return rpc.remote(dest, DistRpcPipelineStage, args=(module_cls, module_args, module_kwargs))
 
 
-class DistRpcPipeline(nn.Module):
+class DistRpcPipeline():
     """A distributed RPC pipeline which links `DistRpcPipelineStage` RRefs."""
 
     def __init__(self, stage_rrefs: List[rpc.RRef], results_cb: Callable[[Any], None]):
@@ -145,9 +145,8 @@ class DistRpcPipeline(nn.Module):
         futs.append(self._rref_list[-1].rpc_async().set_results_callback(results_cb))
         torch.futures.wait_all(futs)
 
-    def forward(self, inputs: Any, **kwargs) -> None:
+    def enqueue_batch(self, inputs: torch.Tensor, split_size: int) -> None:
         """Insert data into the front of the pipeline."""
-        split_size = kwargs.get('split_size', len(inputs))
         for ubatch in iter(inputs.split(split_size, dim=0)):
             self._rref_list[0].rpc_sync().wait_for_ready()
             self._rref_list[0].rpc_async().__call__(ubatch)

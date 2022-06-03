@@ -56,7 +56,7 @@ def module_shard_factory(model_name, model_file, layer_start, layer_end, stage):
     module = _MODEL_CONFIGS[model_name]['shard_module']
     return module(stage, model_name, model_file, is_first, is_last, layer_start, layer_end, True)
 
-def dist_rpc_module_factory(model_name, model_file, stage_ranks, stage_layers, results_cb):
+def dist_rpc_pipeline_factory(model_name, model_file, stage_ranks, stage_layers, results_cb):
     """Get an RPC pipeline instance."""
     # This works b/c all shard implementations have the same constructor interface
     module = _MODEL_CONFIGS[model_name]['shard_module']
