@@ -3,9 +3,11 @@
 class DistContext():
     """Parent class for distributed context managers."""
 
-    def __init__(self, world_size, rank):
-        self._world_size = world_size
-        self._rank = rank
+    def __init__(self, init_args: tuple, init_kwargs: dict):
+        self._init_args = init_args
+        self._init_kwargs = init_kwargs
+        self._world_size = init_kwargs['world_size']
+        self._rank = init_kwargs['rank']
         self._initialized = False
 
     def init(self):

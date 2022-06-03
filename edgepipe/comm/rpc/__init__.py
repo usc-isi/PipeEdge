@@ -15,10 +15,8 @@ def tensorpipe_rpc_backend_options_factory(*args, **kwargs):
 class DistRpcContext(DistContext):
     """The singleton distributed RPC context manager."""
 
-    def __init__(self, init_rpc_args, init_rpc_kwargs):
-        super().__init__(init_rpc_kwargs['world_size'], init_rpc_kwargs['rank'])
-        self._init_args = init_rpc_args
-        self._init_kwargs = init_rpc_kwargs
+    def __init__(self, init_rpc_args: tuple, init_rpc_kwargs: dict):
+        super().__init__(init_rpc_args, init_rpc_kwargs)
 
     def init(self):
         """Initialize the distributed context."""
