@@ -7,23 +7,23 @@ from torch.distributed import rpc
 from .. import DistContext
 
 
+def tensorpipe_rpc_backend_options_factory(*args, **kwargs):
+    """Create a `rpc.TensorPipeRpcBackendOptions`."""
+    return rpc.TensorPipeRpcBackendOptions(*args, **kwargs)
+
+
 class DistRpcContext(DistContext):
     """The singleton distributed RPC context manager."""
 
-    def __init__(self, world_size, rank, num_rpc_worker_threads):
-        super().__init__(world_size, rank)
-        self._num_rpc_worker_threads = num_rpc_worker_threads
+    def __init__(self, init_rpc_args, init_rpc_kwargs):
+        super().__init__(init_rpc_kwargs['world_size'], init_rpc_kwargs['rank'])
+        self._init_args = init_rpc_args
+        self._init_kwargs = init_rpc_kwargs
 
     def init(self):
         """Initialize the distributed context."""
         super().init()
-        # Higher timeout is added to accommodate for kernel compilation time in case of ROCm.
-        options = rpc.TensorPipeRpcBackendOptions(num_worker_threads=self._num_rpc_worker_threads,
-                                                  rpc_timeout=3000)
-        rpc.init_rpc(f"worker{self._rank}",
-                     rank=self._rank,
-                     world_size=self._world_size,
-                     rpc_backend_options=options)
+        rpc.init_rpc(*self._init_args, **self._init_kwargs)
 
     def shutdown(self):
         """Wait for all RPCs to finish and shutdown the distributed context."""

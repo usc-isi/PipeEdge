@@ -6,8 +6,9 @@ from edgepipe.comm.rpc import DistRpcContext
 
 MASTER_ADDR = 'localhost'
 MASTER_PORT = '29501'
-NUM_WORKER_THREADS = 16
 
+INIT_ARGS = ('worker0',)
+INIT_KWARGS = { 'world_size': 1, 'rank': 0 }
 
 class TestDistRpcContext(unittest.TestCase):
     """Test DistRpcContext."""
@@ -19,11 +20,11 @@ class TestDistRpcContext(unittest.TestCase):
 
     def test_lifecycle(self):
         # pylint: disable=no-self-use
-        ctx = DistRpcContext(1, 0, NUM_WORKER_THREADS)
+        ctx = DistRpcContext(INIT_ARGS, INIT_KWARGS)
         ctx.init()
         ctx.shutdown()
 
     def test_context(self):
         # pylint: disable=no-self-use
-        with DistRpcContext(1, 0, NUM_WORKER_THREADS):
+        with DistRpcContext(INIT_ARGS, INIT_KWARGS):
             pass

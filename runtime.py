@@ -13,7 +13,7 @@ import requests
 import torch
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 from edgepipe.comm.p2p import DistP2pContext, DistP2pPipelineStage
-from edgepipe.comm.rpc import DistRpcContext
+from edgepipe.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
 from edgepipe.quantization.hook import forward_hook_quant_encode, forward_pre_hook_quant_decode
 from edgepipe.sched.scheduler import sched_pipeline
 import model_cfg
@@ -368,7 +368,12 @@ def main():
     else:
         # Initialize the distributed RPC context
         logger.debug("GLOO Threads: %d", num_worker_threads)
-        with DistRpcContext(world_size, rank, num_worker_threads) as dist_ctx:
+        rpc_opts = tensorpipe_rpc_backend_options_factory(num_worker_threads=num_worker_threads)
+        with DistRpcContext((f"worker{rank}",),
+                            { 'world_size': world_size,
+                              'rank': rank,
+                              'rpc_backend_options': rpc_opts }
+                           ) as dist_ctx:
             # Send or receive the schedule
             if rank == 0:
                 logger.info("Broadcasting schedule")
