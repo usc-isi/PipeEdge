@@ -41,10 +41,9 @@ class DistRpcContext(DistContext):
         torch.futures.wait_all(futs)
 
 
-class DistRpcPipelineStage(nn.Module):
+class DistRpcPipelineStage():
     """Wrap a module that is not RPC-aware to manage threading and memory."""
     # NOTE: message ordering is NOT enforced!
-    # pylint: disable=too-many-instance-attributes
 
     def __init__(self, module_cls: Type[nn.Module], module_args: tuple=None,
                  module_kwargs: dict=None):
@@ -68,10 +67,6 @@ class DistRpcPipelineStage(nn.Module):
         self._next_rref = None
         self._results_to = None
         self._results_cb = None
-        # Redirect some Module methods to the wrapped module (extend as needed)
-        self.register_buffer = self._module.register_buffer
-        self.register_forward_hook = self._module.register_forward_hook
-        self.register_forward_pre_hook = self._module.register_forward_pre_hook
 
     def set_next(self, stage_rref: rpc.RRef):
         """Set the RRef of the next pipeline stage - used by all stages except the last."""
@@ -88,7 +83,7 @@ class DistRpcPipelineStage(nn.Module):
         # NOTE: This approach breaks down if the previous stage fails to send data afterward.
         self._sem_fwd.acquire() # pylint: disable=consider-using-with
 
-    def forward(self, inputs: Any) -> None:
+    def __call__(self, inputs: Any) -> None:
         """Wrap the module's callable method."""
         try:
             with self._sem_mod:
@@ -109,6 +104,18 @@ class DistRpcPipelineStage(nn.Module):
             # Now release so that another microbatch may be received.
             self._sem_fwd.release()
 
+    def mod_register_buffer(self, *args, **kwargs):
+        """Wrap the module's `register_buffer()` method."""
+        return self._module.register_buffer(*args, **kwargs)
+
+    def mod_register_forward_hook(self, *args, **kwargs):
+        """Wrap the module's `register_forward_hook()` method."""
+        return self._module.register_forward_hook(*args, **kwargs)
+
+    def mod_register_forward_pre_hook(self, *args, **kwargs):
+        """Wrap the module's `register_forward_pre_hook()` method."""
+        return self._module.register_forward_pre_hook(*args, **kwargs)
+
 
 def pipeline_stage_factory(dest: Union[int, rpc.WorkerInfo, str], module_cls: Type[nn.Module],
                            module_args: tuple=None, module_kwargs: dict=None) -> rpc.RRef:
@@ -128,20 +135,20 @@ class DistRpcPipeline():
     def rpc_register_buffer(self, name, tensors):
         """Add buffers to RPC modules."""
         assert len(tensors) == len(self._rref_list)
-        futs = [rref.rpc_async().register_buffer(name, tensor)
+        futs = [rref.rpc_async().mod_register_buffer(name, tensor)
                 for rref, tensor in zip(self._rref_list, tensors)]
         torch.futures.wait_all(futs)
 
     def rpc_register_forward_pre_hook(self, hook, first=True):
         """Register forward pre hook."""
         rrefs = self._rref_list if first else self._rref_list[1:]
-        hook_futures = [rref.rpc_async().register_forward_pre_hook(hook) for rref in rrefs]
+        hook_futures = [rref.rpc_async().mod_register_forward_pre_hook(hook) for rref in rrefs]
         torch.futures.wait_all(hook_futures)
 
     def rpc_register_forward_hook(self, hook, last=True):
         """Register forward hook."""
         rrefs = self._rref_list if last else self._rref_list[:-1]
-        hook_futures = [rref.rpc_async().register_forward_hook(hook) for rref in rrefs]
+        hook_futures = [rref.rpc_async().mod_register_forward_hook(hook) for rref in rrefs]
         torch.futures.wait_all(hook_futures)
 
     def _link_pipeline(self, results_to, results_cb):
