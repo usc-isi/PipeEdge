@@ -40,14 +40,16 @@ for i, t in enumerate(TORCH_TYPES):
 class DistP2pContext(DistContext):
     """The singleton distributed P2P context manager."""
 
-    def __init__(self, world_size, rank, cmd_cb):
-        super().__init__(world_size, rank)
+    def __init__(self, ipg_args, ipg_kwargs, cmd_cb):
+        super().__init__(ipg_kwargs['world_size'], ipg_kwargs['rank'])
+        self._init_args = ipg_args
+        self._init_kwargs = ipg_kwargs
         self._thread_cmd = CommandThread(cmd_cb)
 
     def init(self):
         """Initialize the distributed context and threads."""
         super().init()
-        dist.init_process_group(dist.Backend.GLOO, rank=self._rank, world_size=self._world_size)
+        dist.init_process_group(*self._init_args, **self._init_kwargs)
         self._thread_cmd.start()
 
     def shutdown(self):

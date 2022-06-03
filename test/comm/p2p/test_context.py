@@ -8,6 +8,10 @@ from edgepipe.comm.p2p import DistP2pContext
 MASTER_ADDR = 'localhost'
 MASTER_PORT = '29501'
 
+BACKEND = 'gloo'
+INIT_ARGS = (BACKEND,)
+INIT_KWARGS = { 'world_size': 1, 'rank': 0 }
+
 
 def _cmd_cb(cmd, tensors):
     assert isinstance(cmd, int)
@@ -26,11 +30,11 @@ class TestDistP2pContext(unittest.TestCase):
 
     def test_lifecycle(self):
         # pylint: disable=no-self-use
-        ctx = DistP2pContext(1, 0, _cmd_cb)
+        ctx = DistP2pContext(INIT_ARGS, INIT_KWARGS, _cmd_cb)
         ctx.init()
         ctx.shutdown()
 
     def test_context(self):
         # pylint: disable=no-self-use
-        with DistP2pContext(1, 0, _cmd_cb):
+        with DistP2pContext(INIT_ARGS, INIT_KWARGS, _cmd_cb):
             pass

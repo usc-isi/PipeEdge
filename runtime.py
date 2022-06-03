@@ -316,7 +316,8 @@ def main():
     tik = time.time()
     if args.comm == 'p2p':
         # Initialize the distributed P2P context
-        with DistP2pContext(world_size, rank, handle_cmd) as dist_ctx:
+        with DistP2pContext(('gloo',), { 'world_size': world_size, 'rank': rank }, handle_cmd) \
+            as dist_ctx:
             # Send or receive the schedule
             if rank == 0:
                 logger.info("Broadcasting schedule")
