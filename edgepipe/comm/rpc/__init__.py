@@ -66,6 +66,7 @@ class DistRpcPipelineStage(nn.Module):
         self._sem_mod = threading.Semaphore(value=1) # value = N
         self._module = module_cls(*module_args, **module_kwargs)
         self._next_rref = None
+        self._results_to = None
         self._results_cb = None
         # Redirect some Module methods to the wrapped module (extend as needed)
         self.register_buffer = self._module.register_buffer
@@ -73,11 +74,13 @@ class DistRpcPipelineStage(nn.Module):
         self.register_forward_pre_hook = self._module.register_forward_pre_hook
 
     def set_next(self, stage_rref: rpc.RRef):
-        """Set the RRef of the next pipeline stage."""
+        """Set the RRef of the next pipeline stage - used by all stages except the last."""
         self._next_rref = stage_rref
 
-    def set_results_callback(self, results_cb: Callable[[Any], None]):
-        """Set the results callback function on `next`, for use only by the last stage."""
+    def set_results(self, results_to: Union[int, rpc.WorkerInfo, str],
+                    results_cb: Callable[[Any], None]):
+        """Set the results destination - used by only the last stage."""
+        self._results_to = results_to
         self._results_cb = results_cb
 
     def wait_for_ready(self):
@@ -90,7 +93,7 @@ class DistRpcPipelineStage(nn.Module):
         try:
             with self._sem_mod:
                 outputs = self._module(inputs)
-            if self._results_cb is None:
+            if self._next_rref is not None:
                 # Sending must be asynchronous, otherwise we lose pipeline parallelism.
                 # However, don't try to send until the next stage is ready.
                 # If we were to initiate the async send (and then release _sem_fwd) too soon,
@@ -98,8 +101,10 @@ class DistRpcPipelineStage(nn.Module):
                 self._next_rref.rpc_sync().wait_for_ready()
                 self._next_rref.rpc_async().__call__(outputs)
             else:
+                assert self._results_to is not None
+                assert self._results_cb is not None
                 # There's no synchronization with the results handler, just send the data.
-                rpc.rpc_sync(self._next_rref.owner(), self._results_cb, args=(outputs,))
+                rpc.rpc_sync(self._results_to, self._results_cb, args=(outputs,))
         finally:
             # Now release so that another microbatch may be received.
             self._sem_fwd.release()
@@ -114,10 +119,11 @@ def pipeline_stage_factory(dest: Union[int, rpc.WorkerInfo, str], module_cls: Ty
 class DistRpcPipeline():
     """A distributed RPC pipeline which links `DistRpcPipelineStage` RRefs."""
 
-    def __init__(self, stage_rrefs: List[rpc.RRef], results_cb: Callable[[Any], None]):
+    def __init__(self, stage_rrefs: List[rpc.RRef], results_to: Union[int, rpc.WorkerInfo, str],
+                 results_cb: Callable[[Any], None]):
         super().__init__()
         self._rref_list = stage_rrefs
-        self._link_pipeline(results_cb)
+        self._link_pipeline(results_to, results_cb)
 
     def rpc_register_buffer(self, name, tensors):
         """Add buffers to RPC modules."""
@@ -138,11 +144,11 @@ class DistRpcPipeline():
         hook_futures = [rref.rpc_async().register_forward_hook(hook) for rref in rrefs]
         torch.futures.wait_all(hook_futures)
 
-    def _link_pipeline(self, results_cb: Callable[[Any], None]):
+    def _link_pipeline(self, results_to, results_cb):
         n_stages = len(self._rref_list)
-        futs = [self._rref_list[i].rpc_async().set_next(self._rref_list[(i + 1) % n_stages])
-                for i in range(n_stages)]
-        futs.append(self._rref_list[-1].rpc_async().set_results_callback(results_cb))
+        futs = [self._rref_list[i].rpc_async().set_next(self._rref_list[i + 1])
+                for i in range(n_stages - 1)]
+        futs.append(self._rref_list[-1].rpc_async().set_results(results_to, results_cb))
         torch.futures.wait_all(futs)
 
     def enqueue_batch(self, inputs: torch.Tensor, split_size: int) -> None:

@@ -61,9 +61,12 @@ def dist_rpc_pipeline_factory(model_name, model_file, stage_ranks, stage_layers,
     # This works b/c all shard implementations have the same constructor interface
     module = _MODEL_CONFIGS[model_name]['shard_module']
     stage_rrefs = []
+    assert len(stage_ranks) > 0
+    assert len(stage_ranks) == len(stage_layers)
     for i, (dst_rank, layers) in enumerate(zip(stage_ranks, stage_layers)):
         is_first = i == 0
         is_last = i == len(stage_ranks) - 1
         module_args = (i, model_name, model_file, is_first, is_last, layers[0], layers[1], True)
         stage_rrefs.append(rpc.pipeline_stage_factory(dst_rank, module, module_args=module_args))
-    return rpc.DistRpcPipeline(stage_rrefs, results_cb)
+    # send results to stage=0
+    return rpc.DistRpcPipeline(stage_rrefs, stage_ranks[0], results_cb)
