@@ -12,8 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # TODO: Re-add '3.7' when we fix our build support for it
-        python-version: [ '3.8', '3.9', '3.10' ]
+        python-version: [ '3.7', '3.8', '3.9', '3.10' ]
     name: Python ${{ matrix.python-version }} Test
     steps:
       - uses: actions/checkout@v2
