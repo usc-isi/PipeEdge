@@ -243,17 +243,11 @@ class ViTTransformerShard(TransformerShard):
         return transformer_layer
 
     @torch.no_grad()
-    def forward(self, x: TransformerShardData) -> TransformerShardData:
+    def forward(self, data: TransformerShardData) -> TransformerShardData:
         """Compute shard layers."""
         logger.debug("Start memory %d MB", self.process.memory_info().rss / 1000000)
         start = time.time()
-        if isinstance(x, tuple):
-            assert len(x) == 2
-            x, skip = x[0], x[1]
-        else:
-            skip = x
-        assert isinstance(x, torch.Tensor)
-        assert isinstance(skip, torch.Tensor)
+        x, skip = TransformerShard.parse_forward_data(data)
 
         if self.is_first:
             x = self.embeddings(x)
