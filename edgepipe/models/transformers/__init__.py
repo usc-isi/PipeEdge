@@ -1,9 +1,13 @@
 """Transformers module."""
 import os
+from typing import Tuple, Type, Union
 import psutil
-from torch import nn
+from torch import nn, Tensor
 from transformers import AutoConfig
 from .. import ModuleShard
+
+TransformerShardData: Type = Union[Tensor, Tuple[Tensor, Tensor]]
+"""A transformer shard input/output type."""
 
 class TransformerShard(ModuleShard):
     """Abstract parent class for transformer shards."""

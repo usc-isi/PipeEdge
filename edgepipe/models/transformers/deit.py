@@ -7,7 +7,7 @@ import torch
 from torch import nn
 from transformers.models.deit.modeling_deit import DeiTEmbeddings
 from transformers.models.vit.modeling_vit import ViTLayer, ViTSelfAttention, ViTSelfOutput, ViTIntermediate, ViTOutput
-from . import TransformerShard
+from . import TransformerShard, TransformerShardData
 
 
 logger = logging.getLogger(__name__)
@@ -239,7 +239,8 @@ class DeiTTransformerShard(TransformerShard):
         return transformer_layer
 
     @torch.no_grad()
-    def forward(self, x):
+    def forward(self, x: TransformerShardData) -> TransformerShardData:
+        """Compute shard layers."""
         logger.debug("Start memory %d MB", self.process.memory_info().rss / 1000000)
         start = time.time()
         if isinstance(x, tuple):

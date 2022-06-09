@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from torch import nn
 from transformers.models.bert.modeling_bert import BertEmbeddings, BertPooler, BertSelfAttention, BertSelfOutput, BertIntermediate, BertOutput, BertLayer
-from . import TransformerShard
+from . import TransformerShard, TransformerShardData
 
 
 logger = logging.getLogger(__name__)
@@ -231,7 +231,8 @@ class BertTransformerShard(TransformerShard):
         return transformer_layer
 
     @torch.no_grad()
-    def forward(self, x):
+    def forward(self, x: TransformerShardData) -> TransformerShardData:
+        """Compute shard layers."""
         start = time.time()
         if isinstance(x, tuple):
             assert len(x) == 2
