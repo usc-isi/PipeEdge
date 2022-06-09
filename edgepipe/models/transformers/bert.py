@@ -259,6 +259,6 @@ class BertTransformerShard(TransformerShard):
         logger.info("Shard%d: computed microbatch in: %f sec", self.stage, end - start)
         logger.info("Shard%d: memory: %d MB", self.stage, self.process.memory_info().rss / 1000000)
 
-        if self.end_layer % 4 == 0:
+        if self.end_layer % 2 == 0:
             return x
         return x, skip
