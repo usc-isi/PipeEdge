@@ -64,13 +64,12 @@ class ThreadSafeCounter():
 results_counter = ThreadSafeCounter()
 
 ## for verification
-# origin_model = ViTForImageClassification.from_pretrained(model_name)
+# from transformers import ViTForImageClassification
+# origin_model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224')
 def handle_results(tensors):
     """Process result tensors"""
     logger.info("outputs is %s", tensors)
     results_counter.add(len(tensors))
-    del tensors
-    gc.collect()
     # predicted_class_idx = tensors[0].argmax(-1).item()
     # logger.info("Predicted class: %s", origin_model.config.id2label[predicted_class_idx])
 
