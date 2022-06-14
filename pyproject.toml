@@ -17,9 +17,18 @@ dependencies = [
     "psutil",
     "PyYAML",
     "requests",
-    "timm>=0.3.2",
     "torch>=1.7.0",
     "transformers>=4.6.0",
+]
+
+[project.optional-dependencies]
+# Required by the project source "baseline" directory
+baseline = [
+    "timm>=0.3.2",
+]
+# Required by the project source "tools" directory
+tools = [
+    "timm>=0.3.2",
 ]
 
 [build-system]
