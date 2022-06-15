@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
 
+include(GNUInstallDirs)
+
 if(DEFINED PY_BUILD_CMAKE_MODULE_NAME AND DEFINED PY_BUILD_CMAKE_PACKAGE_VERSION)
   set(_VERSION ${PY_BUILD_CMAKE_PACKAGE_VERSION})
   message(STATUS "Checking for py-build-cmake environment - found")
