@@ -306,7 +306,6 @@ static void load_model(size_t *parameters_in, vector<model_layer> &layers,
     exit(1);
   }
   for (size_t i = 0; i < model.layers; i++) {
-    assert(model.parameters_out[i] >= 0);
     assert(model.mem_MB[i] >= 0);
   }
   // get primitive field(s)
