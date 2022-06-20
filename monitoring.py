@@ -108,7 +108,16 @@ def init(key: str, work_type: str='items', acc_type: str='acc'):
         _monitor_ctx = MonitorContext(key=key, window_size=window_size, log_name=log_name,
                                       log_mode=log_mode, energy_lib=None)
         logger.warning("Couldn't find energymon-default library, disabling energy metrics...")
-    _monitor_ctx.open()
+    try:
+        _monitor_ctx.open()
+    except OSError as e:
+        # Usually happens if energymon can't be initialized, e.g., b/c the power/energy sensors
+        # aren't available or we don't have permission to access them (which often requires root).
+        logger.error("Error code: %d: %s", e.errno, e.strerror)
+        logger.warning("Couldn't init monitor context, trying without energy metrics...")
+        _monitor_ctx = MonitorContext(key=key, window_size=window_size, log_name=log_name,
+                                      log_mode=log_mode, energy_lib=None)
+        _monitor_ctx.open()
     _locks[key] = threading.Lock()
     _work_types[key] = work_type
     _acc_types[key] = acc_type
