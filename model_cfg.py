@@ -1,8 +1,8 @@
 """Model configurations and default parameters."""
-from edgepipe.comm import rpc
-from edgepipe.models.transformers.bert import BertTransformerShard
-from edgepipe.models.transformers.deit import DeiTTransformerShard
-from edgepipe.models.transformers.vit import ViTTransformerShard
+from pipeedge.comm import rpc
+from pipeedge.models.transformers.bert import BertTransformerShard
+from pipeedge.models.transformers.deit import DeiTTransformerShard
+from pipeedge.models.transformers.vit import ViTTransformerShard
 
 _MODEL_CONFIGS = {}
 

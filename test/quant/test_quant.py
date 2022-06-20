@@ -3,7 +3,7 @@
 import unittest
 import numpy as np
 import torch
-from edgepipe.quantization.basic_op import _quant_op, _intmap_encode, _intmap_decode, _intmap2float
+from pipeedge.quantization.basic_op import _quant_op, _intmap_encode, _intmap_decode, _intmap2float
 
 def quant_func(input_shape, quant_bit):
     assert quant_bit >= 0

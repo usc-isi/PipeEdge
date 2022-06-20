@@ -13,7 +13,7 @@ else()
   message(STATUS "  Using default install paths")
 endif()
 
-project(edgepipe VERSION ${_VERSION}
+project(pipeedge VERSION ${_VERSION}
                  LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -27,5 +27,5 @@ add_executable(sched-pipeline sched-pipeline.cpp)
 target_link_libraries(sched-pipeline PRIVATE yaml-cpp)
 
 install(TARGETS sched-pipeline
-        COMPONENT EdgePipe_Runtime
+        COMPONENT PipeEdge_Runtime
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

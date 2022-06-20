@@ -11,7 +11,7 @@ import logging
 import os
 import threading
 from typing import Union
-from edgepipe.monitoring import MonitorContext, MonitorIterationContext
+from pipeedge.monitoring import MonitorContext, MonitorIterationContext
 
 # Environment variables to override parameters
 ENV_WINDOW_SIZE = "WINDOW_SIZE"

@@ -3,7 +3,7 @@ import argparse
 import sys
 import numpy as np
 import yaml
-from edgepipe.sched import yaml_files, yaml_types
+from pipeedge.sched import yaml_files, yaml_types
 import model_cfg
 
 

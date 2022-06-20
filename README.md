@@ -1,6 +1,6 @@
-# EdgePipe
+# PipeEdge
 
-EdgePipe (aka PipeEdge) is an inference framework that pipelines neural network (e.g., transformer) model shards on distributed devices.
+PipeEdge is an inference framework that pipelines neural network (e.g., transformer) model shards on distributed devices.
 It includes an automatic partition scheduler which maps model layers to devices to optimize throughput.
 
 

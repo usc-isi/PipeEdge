@@ -12,10 +12,10 @@ from PIL import Image
 import requests
 import torch
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
-from edgepipe.comm.p2p import DistP2pContext, DistP2pPipelineStage
-from edgepipe.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
-from edgepipe.quantization.hook import forward_hook_quant_encode, forward_pre_hook_quant_decode
-from edgepipe.sched.scheduler import sched_pipeline
+from pipeedge.comm.p2p import DistP2pContext, DistP2pPipelineStage
+from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
+from pipeedge.quantization.hook import forward_hook_quant_encode, forward_pre_hook_quant_decode
+from pipeedge.sched.scheduler import sched_pipeline
 import model_cfg
 import monitoring
 

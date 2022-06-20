@@ -1,7 +1,7 @@
 [project]
-name = "edgepipe"
+name = "pipeedge"
 version = "0.1.0"
-description = "EdgePipe"
+description = "PipeEdge"
 authors = [
     { "name" = "Yang Hu", "email" = "yhu210003@usc.edu" },
     { "name" = "Connor Imes", "email" = "cimes@isi.edu" },
@@ -39,7 +39,7 @@ requires = ["cmake>=3.15", "py-build-cmake @ git+https://github.com/cimes-isi/py
 build-backend = "py_build_cmake.build"
 
 [tool.py-build-cmake.module]
-directory = "."
+directory = "src"
 
 [tool.py-build-cmake.sdist]
 include = [
@@ -54,4 +54,4 @@ minimum_version = "3.8"
 build_type = "RelWithDebInfo"
 source_path = "partition"
 build_args = ["-j"]
-install_components = ["EdgePipe_Runtime"]
+install_components = ["PipeEdge_Runtime"]

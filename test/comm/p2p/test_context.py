@@ -3,7 +3,7 @@
 import os
 import unittest
 import torch
-from edgepipe.comm.p2p import DistP2pContext
+from pipeedge.comm.p2p import DistP2pContext
 
 MASTER_ADDR = 'localhost'
 MASTER_PORT = '29501'

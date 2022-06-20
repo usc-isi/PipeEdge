@@ -1,7 +1,7 @@
 # pylint: disable=C0116
 """Test yaml_types module."""
 import unittest
-from edgepipe.sched.yaml_types import yaml_device_type, yaml_model, yaml_model_profile
+from pipeedge.sched.yaml_types import yaml_device_type, yaml_model, yaml_model_profile
 
 class TestYamlModel(unittest.TestCase):
     """Test yaml_model."""
