@@ -9,6 +9,7 @@ authors = [
 ]
 readme = "README.md"
 requires-python = ">=3.7"
+license = { "file" = "LICENSE" }
 dependencies = [
     "apphb>=0.1.0",
     "energymon>=0.1.0",
