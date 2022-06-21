@@ -43,15 +43,12 @@ directory = "src"
 
 [tool.py-build-cmake.sdist]
 include = [
-    "partition/CMakeLists.txt",
-    "partition/sched-pipeline.cpp",
-    "partition/yaml_types.h",
-    "partition/README.md",
+    "src-native/*",
 ]
 
 [tool.py-build-cmake.cmake]
 minimum_version = "3.8"
 build_type = "RelWithDebInfo"
-source_path = "partition"
+source_path = "src-native"
 build_args = ["-j"]
 install_components = ["PipeEdge_Runtime"]

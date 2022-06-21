@@ -271,8 +271,8 @@ You may build the scheduler application manually, e.g., to experiment with it in
 To build manually:
 
 ```sh
-mkdir partition/build
-cd partition/build
+mkdir src-native/build
+cd src-native/build
 cmake ..
 cmake --build .
 ```
