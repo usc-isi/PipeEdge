@@ -1,8 +1,10 @@
 """Model configurations and default parameters."""
+from torch.distributed import rpc as trpc
 from pipeedge.comm import rpc
 from pipeedge.models.transformers.bert import BertTransformerShard
 from pipeedge.models.transformers.deit import DeiTTransformerShard
 from pipeedge.models.transformers.vit import ViTTransformerShard
+import devices
 
 _MODEL_CONFIGS = {}
 
@@ -49,12 +51,20 @@ def get_model_default_weights_file(model_name):
     return _MODEL_CONFIGS[model_name]['weights_file']
 
 def module_shard_factory(model_name, model_file, layer_start, layer_end, stage):
-    """Get a shard instance."""
+    """Get a shard instance on the globally-configured `devices.DEVICE`."""
     # This works b/c all shard implementations have the same constructor interface
     is_first = layer_start == 1
     is_last = layer_end == get_model_layers(model_name)
     module = _MODEL_CONFIGS[model_name]['shard_module']
-    return module(stage, model_name, model_file, is_first, is_last, layer_start, layer_end, True)
+    shard = module(stage, model_name, model_file, is_first, is_last, layer_start, layer_end, True)
+    shard.to(device=devices.DEVICE)
+    return shard
+
+def _dist_rpc_pipeline_stage_factory(*args, **kwargs) -> rpc.DistRpcPipelineStage:
+    """Get a `rpc.DistRpcPipelineStage` instance on the globally-configured `devices.DEVICE`."""
+    stage = rpc.DistRpcPipelineStage(*args, **kwargs)
+    stage.module_to(device=devices.DEVICE)
+    return stage
 
 def dist_rpc_pipeline_factory(model_name, model_file, stage_ranks, stage_layers, results_cb):
     """Get an RPC pipeline instance."""
@@ -67,6 +77,8 @@ def dist_rpc_pipeline_factory(model_name, model_file, stage_ranks, stage_layers,
         is_first = i == 0
         is_last = i == len(stage_ranks) - 1
         module_args = (i, model_name, model_file, is_first, is_last, layers[0], layers[1], True)
-        stage_rrefs.append(rpc.pipeline_stage_factory(dst_rank, module, module_args=module_args))
+        rref = trpc.remote(dst_rank, _dist_rpc_pipeline_stage_factory, args=(module,),
+                           kwargs={ 'module_args': module_args })
+        stage_rrefs.append(rref)
     # send results to stage=0
     return rpc.DistRpcPipeline(stage_rrefs, stage_ranks[0], results_cb)

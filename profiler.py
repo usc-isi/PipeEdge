@@ -9,6 +9,7 @@ import torch
 import torch.multiprocessing as mp
 import yaml
 from transformers import BertTokenizer
+import devices
 import model_cfg
 
 
@@ -37,7 +38,11 @@ def profile_module_shard(module_cfg, stage_cfg, stage_inputs, warmup, iterations
     """Profile a module shard."""
     process = psutil.Process(os.getpid())
 
-    # Measure memory (create shard)
+    # Measure memory (create shard) on the CPU.
+    # This avoids capturing additional memory overhead when using other devices, like GPUs.
+    # It's OK if the model fits in DRAM but not on the "device" - we'll just fail later.
+    # We consider memory requirements to be a property of the model, not the device/platform.
+    assert devices.DEVICE is None
     # Capturing memory behavior in Python is extremely difficult and results are subject to many
     # factors beyond our ability to control or reliably detect/infer.
     # This works best when run once per process execution with only minimal work done beforehand.
@@ -47,6 +52,16 @@ def profile_module_shard(module_cfg, stage_cfg, stage_inputs, warmup, iterations
     gc.collect()
     stage_end_mem = process.memory_info().rss / 1000000
 
+    # Now move the module to the specified device
+    device = module_cfg['device']
+    if device is not None:
+        devices.DEVICE = torch.device(device)
+    if devices.DEVICE is not None and devices.DEVICE.type == 'cuda':
+        torch.cuda.init()
+    module.to(device=device)
+    module.register_forward_pre_hook(devices.forward_pre_hook_to_device)
+    module.register_forward_hook(devices.forward_hook_to_cpu)
+
     # Measure data input
     shape_in = get_shapes(stage_inputs)
 
@@ -54,7 +69,7 @@ def profile_module_shard(module_cfg, stage_cfg, stage_inputs, warmup, iterations
     if warmup:
         module(stage_inputs)
 
-    # Measure timing (execute shard)
+    # Measure timing (execute shard) - includes data movement overhead (performed in hooks)
     stage_times = []
     for _ in range(iterations):
         stage_start_time = time.time()
@@ -164,6 +179,9 @@ def main():
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("-o", "--results-yml", default="profiler_results.yml", type=str,
                         help="output YAML file")
+    parser.add_argument("-d", "--device", type=str, default=None,
+                        help="compute device type to use, with optional ordinal, "
+                             "e.g.: 'cpu', 'cuda', 'cuda:1'")
     parser.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224",
                         choices=model_cfg.get_model_names(),
                         help="the neural network model for loading")
@@ -219,6 +237,7 @@ def main():
         }
 
     module_cfg = {
+        'device': args.device,
         'name': args.model_name,
         'file': args.model_file,
     }

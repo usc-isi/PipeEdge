@@ -66,6 +66,10 @@ class DistRpcPipelineStage():
         self._results_to = None
         self._results_cb = None
 
+    def module_to(self, *args, **kwargs):
+        """Wrap the module's `nn.Module.to` method (`device` can be be a `str`)."""
+        self._module.to(*args, **kwargs)
+
     def set_next(self, stage_rref: rpc.RRef):
         """Set the RRef of the next pipeline stage - used by all stages except the last."""
         self._next_rref = stage_rref
@@ -113,12 +117,6 @@ class DistRpcPipelineStage():
     def mod_register_forward_pre_hook(self, *args, **kwargs):
         """Wrap the module's `register_forward_pre_hook()` method."""
         return self._module.register_forward_pre_hook(*args, **kwargs)
-
-
-def pipeline_stage_factory(dest: Union[int, rpc.WorkerInfo, str], module_cls: Type[nn.Module],
-                           module_args: tuple=None, module_kwargs: dict=None) -> rpc.RRef:
-    """Create a `DistRpcPipelineStage` on a remote."""
-    return rpc.remote(dest, DistRpcPipelineStage, args=(module_cls, module_args, module_kwargs))
 
 
 class DistRpcPipeline():

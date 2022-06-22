@@ -15,6 +15,7 @@ from pipeedge.comm.p2p import DistP2pContext, DistP2pPipelineStage
 from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
 from pipeedge.quantization.hook import forward_hook_quant_encode, forward_pre_hook_quant_decode
 from pipeedge.sched.scheduler import sched_pipeline
+import devices
 import model_cfg
 import monitoring
 
@@ -317,6 +318,10 @@ def main():
     # Positional arguments
     parser.add_argument("rank", type=int, help="the rank for the current node")
     parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
+    # Device options
+    parser.add_argument("-d", "--device", type=str, default=None,
+                        help="compute device type to use, with optional ordinal, "
+                             "e.g.: 'cpu', 'cuda', 'cuda:1'")
     # Network configurations
     parser.add_argument("-s", "--socket-ifname", type=str, default="lo0",
                         help="socket interface name, use [ifconfig | ipaddress] to check")
@@ -371,12 +376,20 @@ def main():
                              "devices in file should satisfy set membership constraint: "
                              "devices <= HOSTS")
     args = parser.parse_args()
-    ## Force pytorch use CPU
-    device = torch.device('cpu')
+
+    if args.device is not None:
+        devices.DEVICE = torch.device(args.device)
+    logger.info("Device: %s", devices.DEVICE)
+    if devices.DEVICE is not None and devices.DEVICE.type == 'cuda':
+        torch.cuda.init()
+    else:
+        # Workaround for PyTorch RPC comm initialization automatically enabling CUDA
+        # See: https://github.com/pytorch/pytorch/issues/80141
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
     # parallel_threads = 2
     # torch.set_num_threads(parallel_threads)
     # torch.set_num_interop_threads(parallel_threads)
-    logger.debug("Use device: %s", device)
     logger.debug("# parallel intra nodes threads: %d", torch.get_num_threads())
     logger.debug("# parallel inter nodes threads: %d", torch.get_num_interop_threads())
 
@@ -446,6 +459,7 @@ def main():
                                                        stage_layers[stage][1], stage)
                 q_bits = torch.tensor((0 if stage == 0 else stage_quant[stage - 1], stage_quant[stage]))
                 model.register_buffer('quant_bits', q_bits)
+                model.register_forward_hook(devices.forward_hook_to_cpu)
                 model.register_forward_hook(forward_hook_monitor)
                 if stage != len(stage_ranks) - 1:
                     model.register_forward_hook(forward_hook_quant_encode_start)
@@ -456,6 +470,7 @@ def main():
                     model.register_forward_pre_hook(forward_pre_hook_quant_decode)
                     model.register_forward_pre_hook(forward_pre_hook_quant_decode_finish)
                 model.register_forward_pre_hook(forward_pre_hook_monitor)
+                model.register_forward_pre_hook(devices.forward_pre_hook_to_device)
             # Initialize the stage context
             with DistP2pPipelineStage(stage_ranks, stage, model, handle_results) as stage_ctx:
                 stage_ctx.register_recv_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_RECV,))
@@ -510,6 +525,7 @@ def main():
                 q_bits = [torch.tensor((0 if s == 0 else stage_quant[s - 1], stage_quant[s]))
                           for s in range(len(stage_quant))]
                 pipeline.rpc_register_buffer('quant_bits', q_bits)
+                pipeline.rpc_register_forward_hook(devices.forward_hook_to_cpu)
                 pipeline.rpc_register_forward_hook(forward_hook_monitor)
                 pipeline.rpc_register_forward_hook(forward_hook_quant_encode_start, last=False)
                 pipeline.rpc_register_forward_hook(forward_hook_quant_encode, last=False)
@@ -518,6 +534,7 @@ def main():
                 pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode, first=False)
                 pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode_finish, first=False)
                 pipeline.rpc_register_forward_pre_hook(forward_pre_hook_monitor)
+                pipeline.rpc_register_forward_pre_hook(devices.forward_pre_hook_to_device)
                 tik_data = time.time()
                 # start results monitoring - see comments in handle_results
                 monitoring.iteration(MONITORING_KEY_OUTPUT, work=0, accuracy=0, safe=False)
