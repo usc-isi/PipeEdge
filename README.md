@@ -44,11 +44,11 @@ python3 -m venv .venv
 . .venv/bin/activate
 ```
 
-Install the development package and Python package dependencies with:
+Install the development package, Python package dependencies, and tools dependencies with:
 
 ```sh
 pip install -U pip
-pip install -e .
+pip install -e .[tools]
 ```
 
 Download ViT weight files from [Google Cloud](https://console.cloud.google.com/storage/browser/vit_models;tab=objects?pageState=(%22StorageObjectListTable%22:(%22f%22:%22%255B%255D%22))&prefix=&forceOnObjectsSortingFiltering=false), e.g.:
