@@ -1,6 +1,5 @@
 """Distributed pipeline driver application."""
 import argparse
-import gc
 import logging
 import os
 import queue
