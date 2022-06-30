@@ -14,8 +14,8 @@ from typing import Union
 from pipeedge.monitoring import MonitorContext, MonitorIterationContext
 
 # Environment variables to override parameters
-ENV_WINDOW_SIZE = "WINDOW_SIZE"
-ENV_CSV_FILE_MODE = "CSV_FILE_MODE"
+ENV_WINDOW_SIZE: str = "WINDOW_SIZE"
+ENV_CSV_FILE_MODE: str = "CSV_FILE_MODE"
 
 _PRINT_FIELDS_INSTANT = True
 _PRINT_FIELDS_WINDOW = True
@@ -94,7 +94,7 @@ def _log_global(key):
     logger.info("%s: Global Acc Rate: %s %s/sec",
                 key, _monitor_ctx.get_global_accuracy_rate(key=key), _acc_types[key])
 
-def init(key: str, work_type: str='items', acc_type: str='acc'):
+def init(key: str, work_type: str='items', acc_type: str='acc') -> None:
     """Create monitoring context."""
     global _monitor_ctx # pylint: disable=global-statement,invalid-name
     window_size = int(os.getenv(ENV_WINDOW_SIZE, str(_WINDOW_SIZE)))
@@ -122,7 +122,7 @@ def init(key: str, work_type: str='items', acc_type: str='acc'):
     _work_types[key] = work_type
     _acc_types[key] = acc_type
 
-def finish():
+def finish() -> None:
     """Destroy monitoring context."""
     global _monitor_ctx # pylint: disable=global-statement,invalid-name
     if _monitor_ctx is None:
@@ -137,7 +137,7 @@ def finish():
     _work_types.clear()
     _acc_types.clear()
 
-def add_key(key: str, work_type: str='items', acc_type: str='acc'):
+def add_key(key: str, work_type: str='items', acc_type: str='acc') -> None:
     """Add a new key."""
     if _monitor_ctx is None:
         return
@@ -167,14 +167,14 @@ def _iter_ctx_pop(key):
         del _thr_ctx[ident]
     return iter_ctx
 
-def iteration_start(key: str):
+def iteration_start(key: str) -> None:
     """Start an iteration."""
     if _monitor_ctx is None:
         return
     with _locks[key]:
         _monitor_ctx.iteration_start(iter_ctx=_iter_ctx_push(key))
 
-def iteration(key: str, work: int=1, accuracy: Union[int, float]=0, safe: bool=True):
+def iteration(key: str, work: int=1, accuracy: Union[int, float]=0, safe: bool=True) -> None:
     """Complete an iteration."""
     if _monitor_ctx is None:
         return

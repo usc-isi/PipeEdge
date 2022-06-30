@@ -2,7 +2,7 @@
 import csv
 import dataclasses
 import time
-from typing import Any, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 import warnings
 from apphb import logging, Heartbeat
 from energymon.context import EnergyMon
@@ -44,15 +44,15 @@ def _format_record(record):
 @dataclasses.dataclass
 class MonitorIterationContext:
     """An iteration context - in general, clients should NOT modify this."""
-    t_ns_last: int = None
-    e_uj_last: int = None
+    t_ns_last: Optional[int] = None
+    e_uj_last: Optional[int] = None
 
 
 @dataclasses.dataclass
 class _HeartbeatContainer:
     """Class for heartbeat-related data."""
     hbt: Heartbeat = dataclasses.field(default_factory=_heartbeat_factory)
-    log_name: str = None
+    log_name: Optional[str] = None
     log_mode: str = 'x'
     iter_ctx: MonitorIterationContext = dataclasses.field(default_factory=MonitorIterationContext)
     tag: int = 0
@@ -95,8 +95,9 @@ class MonitorContext:
     """
     # pylint: disable=too-many-public-methods
 
-    def __init__(self, key: Any=None, window_size: int=1, log_name: str=None, log_mode: str='x',
-                 energy_lib: str='energymon-default', energy_lib_get: str='energymon_get_default'):
+    def __init__(self, key: Any=None, window_size: int=1, log_name: Optional[str]=None,
+                 log_mode: str='x', energy_lib: Optional[str]='energymon-default',
+                 energy_lib_get: str='energymon_get_default'):
         # pylint: disable=too-many-arguments
         # define _initialized first so if hbt/energymon raise errors, __del__ will still see it
         self._initialized = False
@@ -112,12 +113,12 @@ class MonitorContext:
         else:
             self._em = EnergyMon(lib=energy_lib, func_get=energy_lib_get)
 
-    def keys(self) -> Tuple[Any]:
+    def keys(self) -> tuple:
         """Get a tuple of known keys."""
         return tuple(self._hbt_ctxs.keys())
 
-    def add_heartbeat(self, key: Any=None, window_size: int=None, log_name: str=None,
-                      log_mode: str=None):
+    def add_heartbeat(self, key: Any=None, window_size: Optional[int]=None,
+                      log_name: Optional[str]=None, log_mode: Optional[str]=None) -> None:
         """
         Add a heartbeat instance.
 
@@ -146,7 +147,7 @@ class MonitorContext:
         if self._initialized:
             _heartbeat_log_header(hbt, log_name, self._hbt_ctxs[key].log_mode)
 
-    def open(self):
+    def open(self) -> None:
         """Open the context."""
         if self._initialized:
             raise RuntimeError('Monitor is already open')
@@ -156,7 +157,7 @@ class MonitorContext:
         for hbtc in self._hbt_ctxs.values():
             _heartbeat_log_header(hbtc.hbt, hbtc.log_name, hbtc.log_mode)
 
-    def close(self):
+    def close(self) -> None:
         """Close the context."""
         self._initialized = False
         if self._em is not None:
@@ -166,7 +167,8 @@ class MonitorContext:
         if not self._initialized:
             raise RuntimeError('Monitor is not open')
 
-    def iteration_start(self, key: Any=None, iter_ctx: MonitorIterationContext=None):
+    def iteration_start(self, key: Any=None,
+                        iter_ctx: Optional[MonitorIterationContext]=None) -> None:
         """
         Begin a measurement.
 
@@ -185,7 +187,7 @@ class MonitorContext:
         iter_ctx.e_uj_last = 0 if self._em is None else self._em.get_uj()
 
     def iteration(self, key: Any=None, work: int=1, accuracy: Union[int, float]=1,
-                  iter_ctx: MonitorIterationContext=None):
+                  iter_ctx: Optional[MonitorIterationContext]=None) -> None:
         """
         Complete a measurement.
 
@@ -223,99 +225,99 @@ class MonitorContext:
         iter_ctx.t_ns_last = t_ns
         iter_ctx.e_uj_last = e_uj
 
-    def get_instant_time_s(self, key: Any=None):
+    def get_instant_time_s(self, key: Any=None) -> float:
         """Get instant time in seconds."""
         return self._hbt_ctxs[key].hbt.get_instant_count(fld=_FIELD_TIME) / 1000000000
 
-    def get_instant_heartrate(self, key: Any=None):
+    def get_instant_heartrate(self, key: Any=None) -> float:
         """Get instant heart rate (heartbeats/sec)."""
         return self._hbt_ctxs[key].hbt.get_instant_rate(fld=_FIELD_TIME) * 1000000000
 
-    def get_instant_work(self, key: Any=None):
+    def get_instant_work(self, key: Any=None) -> int:
         """Get instant work."""
         return self._hbt_ctxs[key].hbt.get_instant_count(fld=_FIELD_WORK)
 
-    def get_instant_perf(self, key: Any=None):
+    def get_instant_perf(self, key: Any=None) -> float:
         """Get instant work rate (work/sec)."""
         return self._hbt_ctxs[key].hbt.get_instant_rate(fld=_FIELD_WORK) * 1000000000
 
-    def get_instant_energy_j(self, key: Any=None):
+    def get_instant_energy_j(self, key: Any=None) -> float:
         """Get instant energy in Joules."""
         return self._hbt_ctxs[key].hbt.get_instant_count(fld=_FIELD_ENERGY) / 1000000
 
-    def get_instant_power_w(self, key: Any=None):
+    def get_instant_power_w(self, key: Any=None) -> float:
         """Get instant power in Watts."""
         return self._hbt_ctxs[key].hbt.get_instant_rate(fld=_FIELD_ENERGY) * 1000
 
-    def get_instant_accuracy(self, key: Any=None):
+    def get_instant_accuracy(self, key: Any=None) -> Union[int, float]:
         """Get instant accuracy."""
         return self._hbt_ctxs[key].hbt.get_instant_count(fld=_FIELD_ACCURACY)
 
-    def get_instant_accuracy_rate(self, key: Any=None):
+    def get_instant_accuracy_rate(self, key: Any=None) -> float:
         """Get instant accuracy rate (acc/sec)."""
         return self._hbt_ctxs[key].hbt.get_instant_rate(fld=_FIELD_ACCURACY) * 1000000000
 
-    def get_window_time_s(self, key: Any=None):
+    def get_window_time_s(self, key: Any=None) -> float:
         """Get window time in seconds."""
         return self._hbt_ctxs[key].hbt.get_window_count(fld=_FIELD_TIME) / 1000000000
 
-    def get_window_heartrate(self, key: Any=None):
+    def get_window_heartrate(self, key: Any=None) -> float:
         """Get window heart rate (heartbeats/sec)."""
         return self._hbt_ctxs[key].hbt.get_window_rate(fld=_FIELD_TIME) * 1000000000
 
-    def get_window_work(self, key: Any=None):
+    def get_window_work(self, key: Any=None) -> int:
         """Get window work."""
         return self._hbt_ctxs[key].hbt.get_window_count(fld=_FIELD_WORK)
 
-    def get_window_perf(self, key: Any=None):
+    def get_window_perf(self, key: Any=None) -> float:
         """Get window work rate (work/sec)."""
         return self._hbt_ctxs[key].hbt.get_window_rate(fld=_FIELD_WORK) * 1000000000
 
-    def get_window_energy_j(self, key: Any=None):
+    def get_window_energy_j(self, key: Any=None) -> float:
         """Get window energy in Joules."""
         return self._hbt_ctxs[key].hbt.get_window_count(fld=_FIELD_ENERGY) / 1000000
 
-    def get_window_power_w(self, key: Any=None):
+    def get_window_power_w(self, key: Any=None) -> float:
         """Get window power in Watts."""
         return self._hbt_ctxs[key].hbt.get_window_rate(fld=_FIELD_ENERGY) * 1000
 
-    def get_window_accuracy(self, key: Any=None):
+    def get_window_accuracy(self, key: Any=None) -> Union[int, float]:
         """Get window accuracy."""
         return self._hbt_ctxs[key].hbt.get_window_count(fld=_FIELD_ACCURACY)
 
-    def get_window_accuracy_rate(self, key: Any=None):
+    def get_window_accuracy_rate(self, key: Any=None) -> float:
         """Get window accuracy rate (acc/sec)."""
         return self._hbt_ctxs[key].hbt.get_window_rate(fld=_FIELD_ACCURACY) * 1000000000
 
-    def get_global_time_s(self, key: Any=None):
+    def get_global_time_s(self, key: Any=None) -> float:
         """Get global time in seconds."""
         return self._hbt_ctxs[key].hbt.get_global_count(fld=_FIELD_TIME) / 1000000000
 
-    def get_global_heartrate(self, key: Any=None):
+    def get_global_heartrate(self, key: Any=None) -> float:
         """Get global heart rate (heartbeats/sec)."""
         return self._hbt_ctxs[key].hbt.get_global_rate(fld=_FIELD_TIME) * 1000000000
 
-    def get_global_work(self, key: Any=None):
+    def get_global_work(self, key: Any=None) -> int:
         """Get global work."""
         return self._hbt_ctxs[key].hbt.get_global_count(fld=_FIELD_WORK)
 
-    def get_global_perf(self, key: Any=None):
+    def get_global_perf(self, key: Any=None) -> float:
         """Get global work rate (work/sec)."""
         return self._hbt_ctxs[key].hbt.get_global_rate(fld=_FIELD_WORK) * 1000000000
 
-    def get_global_energy_j(self, key: Any=None):
+    def get_global_energy_j(self, key: Any=None) -> float:
         """Get global energy in Joules."""
         return self._hbt_ctxs[key].hbt.get_global_count(fld=_FIELD_ENERGY) / 1000000
 
-    def get_global_power_w(self, key: Any=None):
+    def get_global_power_w(self, key: Any=None) -> float:
         """Get global power in Watts."""
         return self._hbt_ctxs[key].hbt.get_global_rate(fld=_FIELD_ENERGY) * 1000
 
-    def get_global_accuracy(self, key: Any=None):
+    def get_global_accuracy(self, key: Any=None) -> Union[int, float]:
         """Get global accuracy."""
         return self._hbt_ctxs[key].hbt.get_global_count(fld=_FIELD_ACCURACY)
 
-    def get_global_accuracy_rate(self, key: Any=None):
+    def get_global_accuracy_rate(self, key: Any=None) -> float:
         """Get global accuracy rate (acc/sec)."""
         return self._hbt_ctxs[key].hbt.get_global_rate(fld=_FIELD_ACCURACY) * 1000000000
 
