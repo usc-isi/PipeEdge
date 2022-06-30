@@ -179,9 +179,6 @@ def main():
                         help="iterations to average runtime for")
     args = parser.parse_args()
 
-    # torch.device('cpu')
-    torch.set_grad_enabled(False)
-
     if args.shape_input is not None:
         shapes = []
         for shp in args.shape_input:

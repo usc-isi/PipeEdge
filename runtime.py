@@ -376,7 +376,6 @@ def main():
     # parallel_threads = 2
     # torch.set_num_threads(parallel_threads)
     # torch.set_num_interop_threads(parallel_threads)
-    torch.set_grad_enabled(False)
     logger.debug("Use device: %s", device)
     logger.debug("# parallel intra nodes threads: %d", torch.get_num_threads())
     logger.debug("# parallel inter nodes threads: %d", torch.get_num_interop_threads())
