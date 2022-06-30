@@ -1,5 +1,5 @@
 """YAML types."""
-from typing import List, Union
+from typing import List, Optional, Union
 
 
 def _assert_list_type(lst, dtype):
@@ -51,7 +51,7 @@ def _assert_model_profiles(model_profiles):
 
 
 def yaml_device_type(mem_MB: Union[int, float], bw_Mbps: Union[int, float],
-                     model_profiles: dict) -> dict:
+                     model_profiles: Optional[dict]) -> dict:
     """Create a YAML device type."""
     assert isinstance(mem_MB, (int, float))
     assert isinstance(bw_Mbps, (int, float))

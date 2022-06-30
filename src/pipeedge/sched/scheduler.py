@@ -2,7 +2,7 @@
 import logging
 import os
 import subprocess
-from typing import Dict, List
+from typing import Dict, List, Optional
 import yaml
 
 
@@ -21,9 +21,10 @@ def _log_cpe(exc):
         logger.error(stderr)
 
 
-def sched_pipeline(model_name, buffers_in, buffers_out, batch_size, dtype='torch.float32',
-                   models_file=None, dev_types_file=None, dev_file=None,
-                   app_paths=None) -> List[Dict[str, List[int]]]:
+def sched_pipeline(model_name: str, buffers_in: int, buffers_out: int, batch_size: int,
+                   dtype: str='torch.float32', models_file: Optional[str]=None,
+                   dev_types_file: Optional[str]=None, dev_file: Optional[str]=None,
+                   app_paths: Optional[List[str]]=None) -> List[Dict[str, List[int]]]:
     """Schedule the pipeline."""
     if app_paths is None:
         app_paths = []
