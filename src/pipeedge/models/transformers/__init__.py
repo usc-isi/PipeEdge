@@ -13,7 +13,8 @@ class TransformerShard(ModuleShard):
     """Abstract parent class for transformer shards."""
     # pylint: disable=abstract-method
 
-    def __init__(self, stage, model_name, model_file, is_first, is_last, start_layer, end_layer, load_weight):
+    def __init__(self, stage: int, model_name: str, model_file: str, is_first: bool, is_last: bool,
+                 start_layer: int, end_layer: int, load_weight: bool):
         super().__init__(stage, start_layer, end_layer)
         self.model_name = model_name
         self.weights_file_name = model_file
