@@ -296,12 +296,12 @@ sched_q = queue.Queue()
 stop_event = threading.Event()
 def handle_cmd(cmd, tensors):
     """Process received commands."""
+    assert isinstance(tensors, tuple)
     if cmd == CMD_STOP:
         logger.info("handle_cmd: stop")
         stop_event.set()
     elif cmd == CMD_SCHED:
         logger.info("handle_cmd: sched")
-        assert isinstance(tensors, tuple)
         assert len(tensors) == 3 # stage_layers, stage_quant, stage_ranks
         sched_q.put((tensors[0].tolist(), tensors[1].tolist(), tensors[2].tolist()))
     else:

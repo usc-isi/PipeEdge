@@ -62,8 +62,6 @@ class DistP2pContext(DistContext):
         assert self._initialized
         if tensors is None:
             tensors = ()
-        elif isinstance(tensors, torch.Tensor):
-            tensors = (tensors,)
         tensor_cmd = torch.tensor([cmd, len(tensors)], dtype=torch.int)
         reqs = []
         for dst in range(self._world_size):

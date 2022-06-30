@@ -31,6 +31,8 @@ class DistRpcContext(DistContext):
     def cmd_broadcast(self, remote_cmd_handler, cmd, tensors=None):
         """Broadcast a command."""
         assert self._initialized
+        if tensors is None:
+            tensors = ()
         futs = []
         for rank in range(self._world_size):
             if rank != self._rank:
