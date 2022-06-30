@@ -1,6 +1,10 @@
 """Communication module."""
+from typing import Callable, Tuple, Type
+import torch
 
-class DistContext():
+DistCmdHandler: Type = Callable[[int, Tuple[torch.Tensor, ...]], None]
+
+class DistContext:
     """Parent class for distributed context managers."""
 
     def __init__(self, init_args: tuple, init_kwargs: dict):
@@ -10,11 +14,11 @@ class DistContext():
         self._rank = init_kwargs['rank']
         self._initialized = False
 
-    def init(self):
+    def init(self) -> None:
         """Initialize the distributed context."""
         self._initialized = True
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Shutdown the distributed context."""
         self._initialized = False
 

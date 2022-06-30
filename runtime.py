@@ -6,6 +6,7 @@ import queue
 import sys
 import threading
 import time
+from typing import Tuple
 import numpy as np
 from PIL import Image
 import requests
@@ -155,7 +156,7 @@ results_counter = ThreadSafeCounter()
 ## for verification
 # from transformers import ViTForImageClassification
 # origin_model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224')
-def handle_results(tensors):
+def handle_results(tensors: torch.Tensor):
     """Process result tensors"""
     # Monitoring here is intended to measure time between results, NOT end-to-end pipeline latency.
     # Here we use a traditional Application Heartbeats approach, without an explicit start.
@@ -294,9 +295,8 @@ def load_inputs(model_name, batch_size):
 
 sched_q = queue.Queue()
 stop_event = threading.Event()
-def handle_cmd(cmd, tensors):
+def handle_cmd(cmd: int, tensors: Tuple[torch.Tensor, ...]):
     """Process received commands."""
-    assert isinstance(tensors, tuple)
     if cmd == CMD_STOP:
         logger.info("handle_cmd: stop")
         stop_event.set()

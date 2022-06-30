@@ -3,9 +3,10 @@ import collections
 import queue
 import threading
 import time
+from typing import Any, Callable, List, Optional, Tuple, Union
 import torch
 import torch.distributed as dist
-from .. import DistContext
+from .. import DistCmdHandler, DistContext
 from .util import DistRequestWaitDaemon
 
 # Base tag values
@@ -40,24 +41,24 @@ for i, t in enumerate(TORCH_TYPES):
 class DistP2pContext(DistContext):
     """The singleton distributed P2P context manager."""
 
-    def __init__(self, ipg_args: tuple, ipg_kwargs: dict, cmd_cb):
+    def __init__(self, ipg_args: tuple, ipg_kwargs: dict, cmd_cb: DistCmdHandler):
         super().__init__(ipg_args, ipg_kwargs)
         self._thread_cmd = CommandThread(cmd_cb)
 
-    def init(self):
+    def init(self) -> None:
         """Initialize the distributed context and threads."""
         super().init()
         dist.init_process_group(*self._init_args, **self._init_kwargs)
         self._thread_cmd.start()
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Shutdown threads and the distributed context."""
         super().shutdown()
         self._thread_cmd.stop()
         self._thread_cmd.join()
         dist.destroy_process_group()
 
-    def cmd_broadcast(self, cmd, tensors=None):
+    def cmd_broadcast(self, cmd: int, tensors: Optional[Tuple[torch.Tensor, ...]]=None) -> None:
         """Broadcast a command."""
         assert self._initialized
         if tensors is None:
@@ -117,11 +118,13 @@ class AbstractTensorExchangeThread(threading.Thread):
         self._pre_hooks = []
         self._post_hooks = []
 
-    def register_pre_hook(self, hook, args):
+    def register_pre_hook(self, hook: Callable[..., None], args: tuple) -> None:
         """Register hook with signature: `hook(*args)`."""
         self._pre_hooks.append((hook, args))
 
-    def register_post_hook(self, hook, args):
+    # Python 3.7 type hinting doesn't support the real hook function signature, which is more like:
+    # `Callable[[Tuple[torch.Tensor], ...], None]`
+    def register_post_hook(self, hook: Callable[..., None], args: tuple) -> None:
         """Register hook with signature: `hook(tensors, *args)`."""
         self._post_hooks.append((hook, args))
 
@@ -141,13 +144,13 @@ class AbstractTensorExchangeThread(threading.Thread):
 class TensorSendThread(AbstractTensorExchangeThread):
     """Thread for sending tensors."""
 
-    def __init__(self, queue_out, dst_rank):
+    def __init__(self, queue_out: ConditionQueue, dst_rank: int):
         super().__init__()
         self._queue_out = queue_out
         self._dst_rank = dst_rank
         self._evt_stop_thread = threading.Event()
 
-    def stop(self):
+    def stop(self) -> None:
         """Direct the thread to stop."""
         with self._queue_out.condition:
             self._evt_stop_thread.set()
@@ -182,13 +185,13 @@ class TensorSendThread(AbstractTensorExchangeThread):
 class TensorRecvThread(AbstractTensorExchangeThread):
     """Thread for receiving tensors."""
 
-    def __init__(self, queue_in, src_rank):
+    def __init__(self, queue_in: ConditionQueue, src_rank: int):
         super().__init__()
         self._queue_in = queue_in
         self._src_rank = src_rank
         self._evt_stop_thread = threading.Event()
 
-    def stop(self):
+    def stop(self) -> None:
         """Direct the thread to stop."""
         self._evt_stop_thread.set()
 
@@ -229,14 +232,14 @@ class TensorRecvThread(AbstractTensorExchangeThread):
 class TensorWorkThread(threading.Thread):
     """Thread for processing tensors."""
 
-    def __init__(self, queue_in, queue_out, callback):
+    def __init__(self, queue_in: ConditionQueue, queue_out: ConditionQueue, callback: Callable):
         super().__init__()
         self._queue_in = queue_in
         self._queue_out = queue_out
         self._callback = callback
         self._evt_stop_thread = threading.Event()
 
-    def stop(self):
+    def stop(self) -> None:
         """Direct the thread to stop."""
         with self._queue_in.condition:
             self._evt_stop_thread.set()
@@ -266,12 +269,12 @@ class TensorWorkThread(threading.Thread):
 class CommandThread(threading.Thread):
     """Thread for receiving commands."""
 
-    def __init__(self, callback):
+    def __init__(self, callback: DistCmdHandler):
         super().__init__()
         self._callback = callback
         self._evt_stop_thread = threading.Event()
 
-    def stop(self):
+    def stop(self) -> None:
         """Direct the thread to stop."""
         self._evt_stop_thread.set()
 
@@ -299,10 +302,11 @@ class CommandThread(threading.Thread):
             self._callback(cmd, tensors)
 
 
-class DistP2pPipelineStage():
+class DistP2pPipelineStage:
     """The singleton distributed P2P pipeline stage context manager."""
 
-    def __init__(self, stage_ranks, stage, work_cb, results_cb):
+    def __init__(self, stage_ranks: List[int], stage: int, work_cb: Callable,
+                 results_cb: Callable[[Any], None]):
         self._stage = stage
         self._initialized = False
         self._queues = {}
@@ -339,14 +343,14 @@ class DistP2pPipelineStage():
         # all stages do work
         self._threads['work'] = TensorWorkThread(self._queues['in'], self._queues['out'], work_cb)
 
-    def init(self):
+    def init(self) -> None:
         """Initialize the distributed context and threads."""
         assert not self._initialized
         self._initialized = True
         for thr in self._threads.values():
             thr.start()
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Shutdown threads and the distributed context."""
         assert self._initialized
         self._initialized = False
@@ -354,25 +358,25 @@ class DistP2pPipelineStage():
             thr.stop()
             thr.join()
 
-    def register_recv_pre_hook(self, hook, args):
+    def register_recv_pre_hook(self, hook: Callable[..., None], args: tuple) -> None:
         """Register a pre hook for tensor receive with signature: `hook(*args)`."""
         thr = self._threads.get('recv')
         if thr is not None:
             thr.register_pre_hook(hook, args)
 
-    def register_recv_post_hook(self, hook, args):
+    def register_recv_post_hook(self, hook: Callable[..., None], args: tuple) -> None:
         """Register a post hook for tensor receive with signature: `hook(tensors, *args)`."""
         thr = self._threads.get('recv')
         if thr is not None:
             thr.register_post_hook(hook, args)
 
-    def register_send_pre_hook(self, hook, args):
+    def register_send_pre_hook(self, hook: Callable[..., None], args: tuple) -> None:
         """Register a pre hook for tensor send with signature: `hook(*args)`."""
         thr = self._threads.get('send')
         if thr is not None:
             thr.register_pre_hook(hook, args)
 
-    def register_send_post_hook(self, hook, args):
+    def register_send_post_hook(self, hook: Callable[..., None], args: tuple) -> None:
         """Register a post hook for tensor send with signature: `hook(tensors, *args)`."""
         thr = self._threads.get('send')
         if thr is not None:
@@ -385,7 +389,7 @@ class DistP2pPipelineStage():
     def __exit__(self, *args):
         self.shutdown()
 
-    def enqueue_batch(self, inputs, split_size):
+    def enqueue_batch(self, inputs: torch.Tensor, split_size: int) -> None:
         """Insert data into the front of the pipeline."""
         assert self._stage == 0
         assert self._initialized
