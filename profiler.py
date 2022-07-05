@@ -192,7 +192,11 @@ def main():
     parser.add_argument("-s", "--shape-input", type=str, action='append',
                         help="comma-delimited shape input, e.g., '3,224,224' (required for start_layer != 1)")
     parser.add_argument("-b", "--batch-size", default=8, type=int, help="batch size")
-    parser.add_argument("-w", "--warmup", action="store_true", help="perform a warmup iteration")
+    parser.add_argument("-w", "--warmup", action="store_true", default=True,
+                        help="perform a warmup iteration "
+                             "(strongly recommended, esp. with device='cuda' or iterations>1)")
+    parser.add_argument("--no-warmup", action="store_false", dest="warmup",
+                        help="don't perform a warmup iteration")
     parser.add_argument("-i", "--iterations", default=1, type=int,
                         help="iterations to average runtime for")
     args = parser.parse_args()
