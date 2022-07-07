@@ -14,9 +14,8 @@ logger = logging.getLogger(__name__)
 
 def _forward_kernel(layer, x, skip, kernel_id):
     if kernel_id == 1:
-        x = layer[0](x)
+        x = layer[0](x)[0]
     elif kernel_id == 2:
-        x = x[0]
         x = layer[0](x, skip)
         skip = x
     elif kernel_id == 3:
