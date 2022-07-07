@@ -212,9 +212,8 @@ def main():
             # single tensor
             inputs = torch.randn(args.batch_size, *shapes[0])
     elif args.model_name in ['bert-base-uncased', 'bert-large-uncased']:
-        bert_inputs = np.load("bert_input.npz")['input']
-        inputs_sentence = list(bert_inputs[0: args.batch_size])
-        # print(len(inputs_sentence))
+        with np.load("bert_input.npz") as bert_inputs:
+            inputs_sentence = list(bert_inputs['input'][0: args.batch_size])
         tokenizer = BertTokenizer.from_pretrained(args.model_name)
         inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
     else:
