@@ -29,6 +29,7 @@ baseline = [
 ]
 # Required by the project source "tools" directory
 tools = [
+    "datasets>=1.0.2",
     "timm>=0.3.2",
 ]
 
