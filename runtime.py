@@ -353,6 +353,9 @@ def main():
     usched.add_argument("-r", "--rank-order", type=str, default=None,
                         help="comma-delimited list of ranks in desired stage order; "
                              "default: natural rank order")
+    usched.add_argument("-D", "--data-rank", type=int, default=0,
+                        help="rank where inputs are loaded and outputs are processed - must be "
+                             "the same as stage=0 or not in the stage pipeline")
     asched = parser.add_argument_group('Automated scheduling')
     # This ordered list is a poor man's approach to map the hosts used in the scheduler's output
     # to the rank values needed by PyTorch's distributed framework.
@@ -420,7 +423,7 @@ def main():
                                args.comm, model_name, ubatch_size,
                                args.sched_models_file, args.sched_dev_types_file,
                                args.sched_dev_file)
-        data_rank = stage_ranks[0] # the head of the pipeline handles inputs/outputs
+        data_rank = args.data_rank
         logger.info("Scheduling: data rank: %s", data_rank)
 
     monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
