@@ -70,7 +70,7 @@ def _dist_rpc_pipeline_stage_factory(*args, **kwargs) -> rpc.DistRpcPipelineStag
     return stage
 
 def dist_rpc_pipeline_factory(model_name: str, model_file: str, stage_ranks: List[int],
-                              stage_layers: List[Tuple[int, int]],
+                              stage_layers: List[Tuple[int, int]], results_to: int,
                               results_cb: Callable[[Any], None]) -> rpc.DistRpcPipeline:
     """Get an RPC pipeline instance."""
     # This works b/c all shard implementations have the same constructor interface
@@ -85,5 +85,4 @@ def dist_rpc_pipeline_factory(model_name: str, model_file: str, stage_ranks: Lis
         rref = trpc.remote(dst_rank, _dist_rpc_pipeline_stage_factory, args=(module,),
                            kwargs={ 'module_args': module_args })
         stage_rrefs.append(rref)
-    # send results to stage=0
-    return rpc.DistRpcPipeline(stage_rrefs, stage_ranks[0], results_cb)
+    return rpc.DistRpcPipeline(stage_rrefs, results_to, results_cb)

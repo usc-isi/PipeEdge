@@ -517,11 +517,13 @@ def main():
                 logger.info("Stage layers: %s", stage_layers)
                 logger.info("Stage quant: %s", stage_quant)
                 logger.info("Stage ranks: %s", stage_ranks)
-            if rank == stage_ranks[0]:
+            data_rank = stage_ranks[0] # the head of the pipeline handles inputs/outputs
+            if rank == data_rank:
                 inputs = load_inputs(model_name, batch_size)
                 # Create model shards on workers (requires distributed context to be initialized)
                 pipeline = model_cfg.dist_rpc_pipeline_factory(model_name, model_file, stage_ranks,
-                                                               stage_layers, handle_results)
+                                                               stage_layers, data_rank,
+                                                               handle_results)
                 q_bits = [torch.tensor((0 if s == 0 else stage_quant[s - 1], stage_quant[s]))
                           for s in range(len(stage_quant))]
                 pipeline.rpc_register_buffer('quant_bits', q_bits)
