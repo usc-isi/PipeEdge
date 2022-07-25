@@ -302,8 +302,7 @@ def handle_cmd(cmd: int, tensors: Tuple[torch.Tensor, ...]):
         stop_event.set()
     elif cmd == CMD_SCHED:
         logger.info("handle_cmd: sched")
-        assert len(tensors) == 3 # stage_layers, stage_quant, stage_ranks
-        sched_q.put((tensors[0].tolist(), tensors[1].tolist(), tensors[2].tolist()))
+        sched_q.put(tuple(t.tolist() for t in tensors))
     else:
         logger.warning("handle_cmd: Unknown command: %s", cmd)
 
@@ -421,6 +420,8 @@ def main():
                                args.comm, model_name, ubatch_size,
                                args.sched_models_file, args.sched_dev_types_file,
                                args.sched_dev_file)
+        data_rank = stage_ranks[0] # the head of the pipeline handles inputs/outputs
+        logger.info("Scheduling: data rank: %s", data_rank)
 
     monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
     monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='confidence')
@@ -439,14 +440,15 @@ def main():
                 dist_ctx.cmd_broadcast(CMD_SCHED,
                                        (torch.tensor(stage_layers),
                                         torch.tensor(stage_quant),
-                                        torch.tensor(stage_ranks)))
+                                        torch.tensor(stage_ranks),
+                                        torch.tensor(data_rank)))
             else:
                 logger.info("Waiting for schedule")
-                stage_layers, stage_quant, stage_ranks = sched_q.get()
+                stage_layers, stage_quant, stage_ranks, data_rank = sched_q.get()
                 logger.info("Stage layers: %s", stage_layers)
                 logger.info("Stage quant: %s", stage_quant)
                 logger.info("Stage ranks: %s", stage_ranks)
-            data_rank = stage_ranks[0] # the head of the pipeline handles inputs/outputs
+                logger.info("Data rank: %s", data_rank)
             # Create model shard locally
             try:
                 stage = stage_ranks.index(rank)
@@ -512,14 +514,15 @@ def main():
                 dist_ctx.cmd_broadcast(handle_cmd, CMD_SCHED,
                                        (torch.tensor(stage_layers),
                                         torch.tensor(stage_quant),
-                                        torch.tensor(stage_ranks)))
+                                        torch.tensor(stage_ranks),
+                                        torch.tensor(data_rank)))
             else:
                 logger.info("Waiting for schedule")
-                stage_layers, stage_quant, stage_ranks = sched_q.get()
+                stage_layers, stage_quant, stage_ranks, data_rank = sched_q.get()
                 logger.info("Stage layers: %s", stage_layers)
                 logger.info("Stage quant: %s", stage_quant)
                 logger.info("Stage ranks: %s", stage_ranks)
-            data_rank = stage_ranks[0] # the head of the pipeline handles inputs/outputs
+                logger.info("Data rank: %s", data_rank)
             if rank == data_rank:
                 inputs = load_inputs(model_name, batch_size)
                 # Create model shards on workers (requires distributed context to be initialized)
