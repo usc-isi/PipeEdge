@@ -12,7 +12,7 @@ from PIL import Image
 import requests
 import torch
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
-from pipeedge.comm.p2p import DistP2pContext, DistP2pPipelineStage
+from pipeedge.comm.p2p import DistP2pContext
 from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
 from pipeedge.quantization.hook import forward_hook_quant_encode, forward_pre_hook_quant_decode
 from pipeedge.sched.scheduler import sched_pipeline
@@ -446,6 +446,7 @@ def main():
                 logger.info("Stage layers: %s", stage_layers)
                 logger.info("Stage quant: %s", stage_quant)
                 logger.info("Stage ranks: %s", stage_ranks)
+            data_rank = stage_ranks[0] # the head of the pipeline handles inputs/outputs
             # Create model shard locally
             try:
                 stage = stage_ranks.index(rank)
@@ -472,12 +473,13 @@ def main():
                 model.register_forward_pre_hook(forward_pre_hook_monitor)
                 model.register_forward_pre_hook(devices.forward_pre_hook_to_device)
             # Initialize the stage context
-            with DistP2pPipelineStage(stage_ranks, stage, model, handle_results) as stage_ctx:
+            with model_cfg.dist_p2p_pipeline_stage_factory(stage_ranks, data_rank, rank, stage,
+                                                           model, handle_results) as stage_ctx:
                 stage_ctx.register_recv_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_RECV,))
                 stage_ctx.register_recv_post_hook(p2p_post_hook_monitor, (MONITORING_KEY_RECV,))
                 stage_ctx.register_send_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_SEND,))
                 stage_ctx.register_send_post_hook(p2p_post_hook_monitor, (MONITORING_KEY_SEND,))
-                if stage == 0:
+                if rank == data_rank:
                     inputs = load_inputs(model_name, batch_size)
                     tik_data = time.time()
                     # start results monitoring - see comments in handle_results

@@ -303,45 +303,55 @@ class CommandThread(threading.Thread):
 
 
 class DistP2pPipelineStage:
-    """The singleton distributed P2P pipeline stage context manager."""
+    """
+    The singleton distributed P2P pipeline stage context manager.
 
-    def __init__(self, stage_ranks: List[int], stage: int, work_cb: Callable,
-                 results_cb: Callable[[Any], None]):
-        self._stage = stage
+    Creates receiver, sender, worker, and results processing threads when their respective
+    optional parameters are specified.
+    Threads communicate with each other through data queues, where the exact configuration depends
+    on which threads are requested.
+    Parameters must be specified appropriately on each rank to form a functionally correct pipeline.
+
+    Because there is (at most) one receiver thread, only one rank may specify `results_cb` and
+    that rank must not have a `work_cb` (be a stage) in the middle of the work pipeline.
+    If it's the first work stage, that rank must also be the data source feeding `enqueue_batch`
+    (i.e., not receive inputs from a rank outside the work pipeline).
+    If it's the last work stage, then `rank_dst` must be `None`, otherwise the results processing
+    thread and sender thread would race for the data produced by the work thread.
+    Otherwise, the rank specifying `results_cb` must not be in the work pipeline.
+
+    Ranks that do nothing may specify `None` for all parameters.
+    """
+
+    def __init__(self, rank_src: Optional[int], rank_dst: Optional[int],
+                 work_cb: Optional[Callable], results_cb: Optional[Callable[[Any], None]]):
         self._initialized = False
         self._queues = {}
         self._threads = {}
-        if self._stage is not None:
-            self._create_stage(stage_ranks, work_cb, results_cb)
+        self._create_stage(rank_src, rank_dst, work_cb, results_cb)
 
-    def _create_stage(self, stage_ranks, work_cb, results_cb):
-        # stage 0 feeds `in` queue using `enqueue_batch()`; last stage sends results to stage 0
-        # inputs are already loaded in memory, so no need to limit in-queue size on stage 0
-        if self._stage == 0:
-            self._queues['in'] = ConditionQueue(maxsize=0)
-            # results thread must use a different queue than feeds the first model shard
-            self._queues['res'] = ConditionQueue(maxsize=1)
-            self._threads['res'] = TensorWorkThread(self._queues['res'], None, results_cb)
+    def _create_stage(self, rank_src, rank_dst, work_cb, results_cb):
+        self._queues['in'] = ConditionQueue(maxsize=1)
+        self._queues['out'] = ConditionQueue(maxsize=1)
+        self._queues['res'] = ConditionQueue(maxsize=1)
+
+        if work_cb is None:
+            # Short-circuit from the inbound queue (can relay data without a worker thread)
+            self._queues['out'] = self._queues['in']
         else:
-            self._queues['in'] = ConditionQueue(maxsize=1)
+            self._threads['work'] = TensorWorkThread(self._queues['in'], self._queues['out'],
+                                                     work_cb)
 
-        if len(stage_ranks) > 1:
-            rank_src = stage_ranks[(self._stage - 1)]
-            rank_dst = stage_ranks[(self._stage + 1) % len(stage_ranks)]
-            # create send/receive/command threads
-            self._queues['out'] = ConditionQueue(maxsize=1)
+        if results_cb is not None:
+            queue_res = self._queues['out'] if rank_dst is None else self._queues['res']
+            self._threads['res'] = TensorWorkThread(queue_res, None, results_cb)
+
+        if rank_dst is not None:
             self._threads['send'] = TensorSendThread(self._queues['out'], rank_dst)
-            if self._stage == 0:
-                # stage 0's receiver thread gets results, so feeds a different queue
-                self._threads['recv'] = TensorRecvThread(self._queues['res'], rank_src)
-            else:
-                self._threads['recv'] = TensorRecvThread(self._queues['in'], rank_src)
-        else:
-            # degenerate case: no send/receive/command threads; the out queue is the results queue
-            self._queues['out'] = self._queues['res']
 
-        # all stages do work
-        self._threads['work'] = TensorWorkThread(self._queues['in'], self._queues['out'], work_cb)
+        if rank_src is not None:
+            queue_in = self._queues['in'] if results_cb is None else self._queues['res']
+            self._threads['recv'] = TensorRecvThread(queue_in, rank_src)
 
     def init(self) -> None:
         """Initialize the distributed context and threads."""
@@ -390,8 +400,7 @@ class DistP2pPipelineStage:
         self.shutdown()
 
     def enqueue_batch(self, inputs: torch.Tensor, split_size: int) -> None:
-        """Insert data into the front of the pipeline."""
-        assert self._stage == 0
+        """Insert data into the pipeline."""
         assert self._initialized
         for input_chunk in iter(inputs.split(split_size, dim=0)):
             queue_in = self._queues['in']

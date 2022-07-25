@@ -1,7 +1,7 @@
 """Model configurations and default parameters."""
-from typing import Any, Callable, List, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 from torch.distributed import rpc as trpc
-from pipeedge.comm import rpc
+from pipeedge.comm import p2p, rpc
 from pipeedge.models import ModuleShard
 from pipeedge.models.transformers.bert import BertTransformerShard
 from pipeedge.models.transformers.deit import DeiTTransformerShard
@@ -86,3 +86,42 @@ def dist_rpc_pipeline_factory(model_name: str, model_file: str, stage_ranks: Lis
                            kwargs={ 'module_args': module_args })
         stage_rrefs.append(rref)
     return rpc.DistRpcPipeline(stage_rrefs, results_to, results_cb)
+
+def dist_p2p_pipeline_stage_factory(stage_ranks: List[int], data_rank: int, rank: int,
+                                    stage: Optional[int], module: Optional[ModuleShard],
+                                    handle_results_cb: Callable[[Any], None]) \
+    -> p2p.DistP2pPipelineStage:
+    """Get a P2P pipeline stage instance."""
+    if rank == data_rank:
+        if stage is None:
+            # We're data_rank w/out a module shard
+            rank_src = stage_ranks[-1]
+            rank_dst = stage_ranks[0]
+            work_cb = None
+        else:
+            # We're simultaneously data_rank and a pipeline stage
+            # In this case, the current p2p design requires that we must be the first stage
+            assert stage == 0
+            # Degenerate case when we're both data_rank and the only stage
+            rank_src = stage_ranks[-1] if len(stage_ranks) > 1 else None
+            rank_dst = stage_ranks[1] if len(stage_ranks) > 1 else None
+            work_cb = module
+        # While the handle_results_cb parameter isn't optional, we should assert it anyway.
+        # If None, DistP2pPipelineStage would loop results back to its input queue, then the first
+        # module shard would try to process the results tensors, which it would fail to unpack.
+        # It wouldn't be obvious from the error that the real problem was handle_results_cb=None.
+        assert handle_results_cb is not None
+        results_cb = handle_results_cb
+    elif stage is None:
+        # We're completely idle
+        rank_src = None
+        rank_dst = None
+        work_cb = None
+        results_cb = None
+    else:
+        # We're not data_rank, but we have a module shard (possibly first and/or last stage)
+        rank_src = data_rank if stage == 0 else stage_ranks[(stage - 1)]
+        rank_dst = data_rank if stage == len(stage_ranks) - 1 else stage_ranks[(stage + 1)]
+        work_cb = module
+        results_cb = None
+    return p2p.DistP2pPipelineStage(rank_src, rank_dst, work_cb, results_cb)
