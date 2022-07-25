@@ -90,7 +90,8 @@ def _send_tensor(tensor, dst, tag_base, fn_send=dist.send):
     results = []
     results.append(fn_send(tensor=tensor_dtype, dst=dst, tag=tag_base+TAG_TENSOR_DTYPE))
     results.append(fn_send(tensor=tensor_shape_len, dst=dst, tag=tag_base+TAG_TENSOR_SHAPE_LEN))
-    results.append(fn_send(tensor=tensor_shape, dst=dst, tag=tag_base+TAG_TENSOR_SHAPE))
+    if tensor_shape_len > 0:
+        results.append(fn_send(tensor=tensor_shape, dst=dst, tag=tag_base+TAG_TENSOR_SHAPE))
     results.append(fn_send(tensor=tensor, dst=dst, tag=tag_base+TAG_TENSOR))
     return results
 
@@ -103,7 +104,8 @@ def _recv_tensor(src, tag_base):
     dist.recv(tensor=tensor_shape_len, src=src, tag=tag_base+TAG_TENSOR_SHAPE_LEN)
     _tensor_shape_len = int(tensor_shape_len)
     tensor_shape = torch.zeros(_tensor_shape_len, dtype=torch.int)
-    dist.recv(tensor=tensor_shape, src=src, tag=tag_base+TAG_TENSOR_SHAPE)
+    if _tensor_shape_len > 0:
+        dist.recv(tensor=tensor_shape, src=src, tag=tag_base+TAG_TENSOR_SHAPE)
     _tensor_shape = [int(x) for x in tensor_shape] # list(map(lambda x: int(x), tensor_shape))
     tensor = torch.zeros(_tensor_shape, dtype=_tensor_dtype)
     dist.recv(tensor=tensor, src=src, tag=tag_base+TAG_TENSOR)
