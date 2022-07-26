@@ -101,7 +101,8 @@ def dist_p2p_pipeline_stage_factory(stage_ranks: List[int], data_rank: int, rank
         else:
             # We're simultaneously data_rank and a pipeline stage
             # In this case, the current p2p design requires that we must be the first stage
-            assert stage == 0
+            if stage != 0:
+                raise ValueError(f"Data rank must be stage=0 or stage=None, but stage={stage}")
             # Degenerate case when we're both data_rank and the only stage
             rank_src = stage_ranks[-1] if len(stage_ranks) > 1 else None
             rank_dst = stage_ranks[1] if len(stage_ranks) > 1 else None
