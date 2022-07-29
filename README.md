@@ -51,19 +51,12 @@ pip install -U pip
 pip install -e .[tools]
 ```
 
-Download ViT weight files from [Google Cloud](https://console.cloud.google.com/storage/browser/vit_models;tab=objects?pageState=(%22StorageObjectListTable%22:(%22f%22:%22%255B%255D%22))&prefix=&forceOnObjectsSortingFiltering=false), e.g.:
-
-```sh
-wget https://storage.googleapis.com/vit_models/imagenet21k%2Bimagenet2012/ViT-B_16-224.npz
-wget https://storage.googleapis.com/vit_models/imagenet21k%2Bimagenet2012/ViT-L_16-224.npz
-wget https://storage.googleapis.com/vit_models/imagenet21k/ViT-H_14.npz
-```
-
-Download BERT and DeiT weight files, too:
+Download model weight files (ViT files are from [Google Cloud](https://console.cloud.google.com/storage/browser/vit_models)):
 
 ```sh
 python tools/bert_save_weights.py
 python tools/deit_save_weights.py
+python tools/vit_save_weights.py
 ```
 
 ### Optional dependencies:
