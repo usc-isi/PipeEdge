@@ -180,7 +180,7 @@ def _get_default_quant(n_stages):
     return [0] * n_stages
 
 
-def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, comm, model_name,
+def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, model_name,
                        microbatch_size, s_models_file, s_dev_types_file, s_dev_file):
     """Get the pipeline schedule."""
     if partition:
@@ -392,9 +392,8 @@ def main():
     if rank == 0:
         stage_layers, stage_quant, stage_ranks = \
             get_pipeline_sched(world_size, args.hosts, args.partition, args.quant, args.rank_order,
-                               args.comm, model_name, ubatch_size,
-                               args.sched_models_file, args.sched_dev_types_file,
-                               args.sched_dev_file)
+                               model_name, ubatch_size, args.sched_models_file,
+                               args.sched_dev_types_file, args.sched_dev_file)
         data_rank = args.data_rank
         logger.info("Scheduling: data rank: %s", data_rank)
 
