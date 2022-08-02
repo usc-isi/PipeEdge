@@ -52,10 +52,12 @@ def get_model_default_weights_file(model_name: str) -> str:
     """Get a model's default weights file name."""
     return _MODEL_CONFIGS[model_name]['weights_file']
 
-def module_shard_factory(model_name: str, model_file: str, layer_start: int, layer_end: int,
-                         stage: int) -> ModuleShard:
+def module_shard_factory(model_name: str, model_file: Optional[str], layer_start: int,
+                         layer_end: int, stage: int) -> ModuleShard:
     """Get a shard instance on the globally-configured `devices.DEVICE`."""
     # This works b/c all shard implementations have the same constructor interface
+    if model_file is None:
+        model_file = get_model_default_weights_file(model_name)
     is_first = layer_start == 1
     is_last = layer_end == get_model_layers(model_name)
     module = _MODEL_CONFIGS[model_name]['shard_module']
@@ -69,11 +71,13 @@ def _dist_rpc_pipeline_stage_factory(*args, **kwargs) -> rpc.DistRpcPipelineStag
     stage.module_to(device=devices.DEVICE)
     return stage
 
-def dist_rpc_pipeline_factory(model_name: str, model_file: str, stage_ranks: List[int],
+def dist_rpc_pipeline_factory(model_name: str, model_file: Optional[str], stage_ranks: List[int],
                               stage_layers: List[Tuple[int, int]], results_to: int,
                               results_cb: Callable[[Any], None]) -> rpc.DistRpcPipeline:
     """Get an RPC pipeline instance."""
     # This works b/c all shard implementations have the same constructor interface
+    if model_file is None:
+        model_file = get_model_default_weights_file(model_name)
     module = _MODEL_CONFIGS[model_name]['shard_module']
     stage_rrefs = []
     assert len(stage_ranks) > 0
