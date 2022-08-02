@@ -1,5 +1,9 @@
 """Models module."""
-from torch import nn
+from typing import Tuple, Type, Union
+from torch import nn, Tensor
+
+ModuleShardData: Type = Union[Tensor, Tuple[Tensor, ...]]
+"""A module shard input/output type."""
 
 class ModuleShard(nn.Module):
     """Abstract parent class for module shards."""
