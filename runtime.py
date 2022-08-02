@@ -90,7 +90,7 @@ def p2p_post_hook_monitor(tensors, key):
     assert isinstance(tensors, tuple)
     # Measure work in total data size (MBits), which is a useful metric for data transfers.
     # We don't have enough context here to map tensor structure to a higher-level work concept.
-    mbits = sum([t.numel() * t.numpy().dtype.itemsize for t in tensors]) * 8 / 1000000
+    mbits = sum(t.numel() * t.numpy().dtype.itemsize for t in tensors) * 8 / 1000000
     # Accuracy has no meaning here.
     monitoring.iteration(key, work=mbits)
 
