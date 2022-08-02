@@ -14,6 +14,7 @@ import torch
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 from pipeedge.comm.p2p import DistP2pContext
 from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
+from pipeedge import models
 from pipeedge.quantization.hook import forward_hook_quant_encode, forward_pre_hook_quant_decode
 from pipeedge.sched.scheduler import sched_pipeline
 import devices
@@ -42,37 +43,6 @@ MONITORING_KEY_QUANT_ENCODE = 'quant_encode'
 MONITORING_KEY_RECV = 'recv'
 MONITORING_KEY_SEND = 'send'
 
-def _inputs_microbatch_size(inputs):
-    """Get the microbatch size from the inputs tuple."""
-    assert isinstance(inputs, tuple)
-    assert len(inputs) > 0
-    if isinstance(inputs[0], torch.Tensor):
-        # a single tensor
-        ubatch_size = len(inputs[0])
-    else:
-        # a tuple of tensors
-        assert isinstance(inputs[0], tuple)
-        assert len(inputs[0]) > 0
-        ubatch_size = len(inputs[0][0])
-        # Sanity check that tensors are the same length (then tuple tensor order doesn't matter)
-        for tensor in inputs[0]:
-            assert isinstance(tensor, torch.Tensor)
-            assert len(tensor) == ubatch_size
-    return ubatch_size
-
-def _outputs_microbatch_size(outputs):
-    """Get the microbatch size from the outputs tensor or tuple."""
-    if isinstance(outputs, torch.Tensor):
-        outputs = (outputs,)
-    assert isinstance(outputs, tuple)
-    assert len(outputs) > 0
-    ubatch_size = len(outputs[0])
-    # Sanity check that tensors are the same length (then tuple tensor order doesn't matter)
-    for tensor in outputs:
-        assert isinstance(tensor, torch.Tensor)
-        assert len(tensor) == ubatch_size
-    return ubatch_size
-
 def forward_pre_hook_monitor(_module, _inputs) -> None:
     """Register iteration start."""
     monitoring.iteration_start(MONITORING_KEY_MODEL)
@@ -80,7 +50,7 @@ def forward_pre_hook_monitor(_module, _inputs) -> None:
 def forward_hook_monitor(module, _inputs, outputs) -> None:
     """Register iteration completion."""
     # Measure work as the microbatch size
-    n_items = _outputs_microbatch_size(outputs)
+    n_items = models.get_microbatch_size(outputs, verify=True)
     # Measure accuracy as the number of layers processed
     n_layers = module.end_layer - module.start_layer + 1
     monitoring.iteration(MONITORING_KEY_MODEL, work=n_items, accuracy=n_layers)
@@ -93,7 +63,8 @@ def forward_pre_hook_quant_decode_finish(module, inputs) -> None:
     """Register quantization decode completion."""
     # Measure work as the microbatch size, but quantization only does work if quant_bits > 0.
     quant_bits = module.quant_bits.tolist()[0]
-    n_items = _inputs_microbatch_size(inputs) if quant_bits > 0 else 0
+    assert isinstance(inputs, tuple)
+    n_items = models.get_microbatch_size(inputs[0], verify=True) if quant_bits > 0 else 0
     monitoring.iteration(MONITORING_KEY_QUANT_DECODE, work=n_items, accuracy=quant_bits)
 
 def forward_hook_quant_encode_start(_module, _inputs, _outputs) -> None:
@@ -106,7 +77,8 @@ def forward_hook_quant_encode_finish(module, inputs, _outputs) -> None:
     # If output tensors are encoded, they're collapsed s.t. we can't infer the microbatch size.
     # We'll rely on the inputs instead.
     quant_bits = module.quant_bits.tolist()[1]
-    n_items = _inputs_microbatch_size(inputs) if quant_bits > 0 else 0
+    assert isinstance(inputs, tuple)
+    n_items = models.get_microbatch_size(inputs[0], verify=True) if quant_bits > 0 else 0
     monitoring.iteration(MONITORING_KEY_QUANT_ENCODE, work=n_items, accuracy=quant_bits)
 
 def p2p_pre_hook_monitor(key):
@@ -163,7 +135,7 @@ def handle_results(tensors: torch.Tensor):
     # Therefore, an initial iteration should be reported prior to here to indicate the start (e.g.,
     # when the pipeline is initialized), otherwise metrics from the first report will be lost.
     # Measure work as the microbatch size.
-    n_items = _outputs_microbatch_size(tensors)
+    n_items = models.get_microbatch_size(tensors, verify=True)
     # Measure accuracy as the prediction confidence values.
     # Use softmax to get probability distribution for each tensor.
     prob_sum = torch.nn.functional.softmax(tensors, dim=-1).max(dim=-1)[0].sum().item()
