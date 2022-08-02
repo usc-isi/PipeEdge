@@ -6,7 +6,7 @@ import queue
 import sys
 import threading
 import time
-from typing import Tuple
+from typing import List, Optional, Tuple
 import numpy as np
 from PIL import Image
 import requests
@@ -146,7 +146,7 @@ def handle_results(tensors: torch.Tensor):
     # logger.info("Predicted class: %s", origin_model.config.id2label[predicted_class_idx])
 
 
-def parse_yaml_sched(sched, hosts):
+def parse_yaml_sched(sched: List[dict], hosts: Optional[List[str]]):
     """Parse the YAML schedule into `stage_layers` and `stage_ranks`."""
     # list of single-entry maps
     assert isinstance(sched, list)
@@ -176,22 +176,24 @@ def parse_yaml_sched(sched, hosts):
     return stage_layers, stage_ranks
 
 
-def _get_default_quant(n_stages):
+def _get_default_quant(n_stages: int):
     return [0] * n_stages
 
 
-def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, model_name,
-                       microbatch_size, s_models_file, s_dev_types_file, s_dev_file):
+def get_pipeline_sched(world_size: int, hosts: Optional[List[str]],
+                       partition: Optional[List[Tuple[int, int]]], quant: Optional[List[int]],
+                       rank_order: Optional[List[int]], model_name: str, microbatch_size: int,
+                       s_models_file: Optional[str], s_dev_types_file: Optional[str],
+                       s_dev_file: Optional[str]):
     """Get the pipeline schedule."""
     if partition:
         # User specified the stage layers
         logger.info("Scheduling: using user-defined partitioning")
-        parts = [int(i) for i in partition.split(',')]
-        stage_layers = [(parts[i], parts[i+1]) for i in range(0, len(parts), 2)]
+        stage_layers = partition
         if quant:
             # User specified quantization
             logger.info("Scheduling: using user-defined quantization")
-            stage_quant = [int(i) for i in quant.split(',')]
+            stage_quant = quant
         else:
             # No quantization by default
             logger.info("Scheduling: using default quantization")
@@ -199,7 +201,7 @@ def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, model_na
         if rank_order:
             # User specified the stage ranks
             logger.info("Scheduling: using user-defined rank ordering")
-            stage_ranks = [int(i) for i in rank_order.split(',')]
+            stage_ranks = rank_order
         else:
             # Use natural rank order
             logger.info("Scheduling: using natural rank ordering")
@@ -221,7 +223,6 @@ def get_pipeline_sched(world_size, hosts, partition, quant, rank_order, model_na
         #   "hosts" == hosts in "world" context
         logger.info("Scheduling: using scheduler algorithm")
         if hosts:
-            hosts = hosts.split(',')
             if len(hosts) != world_size:
                 raise RuntimeError("Specified hosts count != world size")
         # Scheduler assumes 1 processing thread and accounts for those in/out buffers independently.
@@ -389,9 +390,18 @@ def main():
     # The master rank computes schedule, then:
     # (1) with comm='p2p': distributes it, then each stage initializes their own stage context
     # (2) with comm='rpc': the rank assigned to stage 0 instantiates the pipeline
+    if args.partition is None:
+        partition = None
+    else:
+        parts = [int(i) for i in args.partition.split(',')]
+        assert len(parts) % 2 == 0
+        partition = [(parts[i], parts[i+1]) for i in range(0, len(parts), 2)]
+    quant = None if args.quant is None else [int(i) for i in args.quant.split(',')]
+    rank_order = None if args.rank_order is None else [int(i) for i in args.rank_order.split(',')]
+    hosts = None if args.hosts is None else args.hosts.split(',')
     if rank == 0:
         stage_layers, stage_quant, stage_ranks = \
-            get_pipeline_sched(world_size, args.hosts, args.partition, args.quant, args.rank_order,
+            get_pipeline_sched(world_size, hosts, partition, quant, rank_order,
                                model_name, ubatch_size, args.sched_models_file,
                                args.sched_dev_types_file, args.sched_dev_file)
         data_rank = args.data_rank
