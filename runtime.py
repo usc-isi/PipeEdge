@@ -280,6 +280,163 @@ def handle_cmd(cmd: int, tensors: Tuple[torch.Tensor, ...]):
         logger.warning("handle_cmd: Unknown command: %s", cmd)
 
 
+def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Optional[str],
+                     batch_size: int, ubatch_size: int, partition: Optional[List[Tuple[int, int]]],
+                     quant: Optional[List[int]], rank_order: Optional[List[int]], data_rank: int,
+                     hosts: Optional[List[str]], sched_models_file: Optional[str],
+                     sched_dev_types_file: Optional[str], sched_dev_file: Optional[str]):
+    """Run the pipeline using P2P communication."""
+    monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
+    monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='confidence')
+    monitoring.add_key(MONITORING_KEY_QUANT_DECODE, work_type='tensors', acc_type='bits')
+    monitoring.add_key(MONITORING_KEY_QUANT_ENCODE, work_type='tensors', acc_type='bits')
+    monitoring.add_key(MONITORING_KEY_RECV, work_type='Mbits')
+    monitoring.add_key(MONITORING_KEY_SEND, work_type='Mbits')
+    with DistP2pContext(('gloo',), { 'world_size': world_size, 'rank': rank }, handle_cmd) \
+        as dist_ctx:
+        # Send or receive the schedule
+        if rank == 0:
+            stage_layers, stage_quant, stage_ranks = \
+                get_pipeline_sched(world_size, hosts, partition, quant, rank_order,
+                                   model_name, ubatch_size, sched_models_file,
+                                   sched_dev_types_file, sched_dev_file)
+            logger.info("Scheduling: data rank: %s", data_rank)
+            logger.info("Broadcasting schedule")
+            dist_ctx.cmd_broadcast(CMD_SCHED,
+                                   (torch.tensor(stage_layers),
+                                    torch.tensor(stage_quant),
+                                    torch.tensor(stage_ranks),
+                                    torch.tensor(data_rank)))
+        else:
+            logger.info("Waiting for schedule")
+            stage_layers, stage_quant, stage_ranks, data_rank = sched_q.get()
+            logger.info("Stage layers: %s", stage_layers)
+            logger.info("Stage quant: %s", stage_quant)
+            logger.info("Stage ranks: %s", stage_ranks)
+            logger.info("Data rank: %s", data_rank)
+        # Create model shard locally
+        try:
+            stage = stage_ranks.index(rank)
+        except ValueError:
+            # we're not assigned a stage at this time
+            stage = None
+        if stage is None:
+            model = None
+        else:
+            model = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage][0],
+                                                   stage_layers[stage][1], stage)
+            q_bits = torch.tensor((0 if stage == 0 else stage_quant[stage - 1], stage_quant[stage]))
+            model.register_buffer('quant_bits', q_bits)
+            model.register_forward_hook(devices.forward_hook_to_cpu)
+            model.register_forward_hook(forward_hook_monitor)
+            if stage != len(stage_ranks) - 1:
+                model.register_forward_hook(forward_hook_quant_encode_start)
+                model.register_forward_hook(forward_hook_quant_encode)
+                model.register_forward_hook(forward_hook_quant_encode_finish)
+            if stage != 0:
+                model.register_forward_pre_hook(forward_pre_hook_quant_decode_start)
+                model.register_forward_pre_hook(forward_pre_hook_quant_decode)
+                model.register_forward_pre_hook(forward_pre_hook_quant_decode_finish)
+            model.register_forward_pre_hook(forward_pre_hook_monitor)
+            model.register_forward_pre_hook(devices.forward_pre_hook_to_device)
+        # Initialize the stage context
+        with model_cfg.dist_p2p_pipeline_stage_factory(stage_ranks, data_rank, rank, stage, model,
+                                                       handle_results) as stage_ctx:
+            stage_ctx.register_recv_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_RECV,))
+            stage_ctx.register_recv_post_hook(p2p_post_hook_monitor, (MONITORING_KEY_RECV,))
+            stage_ctx.register_send_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_SEND,))
+            stage_ctx.register_send_post_hook(p2p_post_hook_monitor, (MONITORING_KEY_SEND,))
+            if rank == data_rank:
+                inputs = load_inputs(model_name, batch_size)
+                tik_data = time.time()
+                # start results monitoring - see comments in handle_results
+                monitoring.iteration(MONITORING_KEY_OUTPUT, work=0, accuracy=0, safe=False)
+                # this call is asynchronous - wait for results to get end-to-end timings
+                start_count = results_counter.value
+                stage_ctx.enqueue_batch(inputs, ubatch_size)
+                results_counter.wait_gte(start_count + len(inputs))
+                tok_data = time.time()
+                latency = tok_data - tik_data
+                throughput = batch_size / latency
+                logger.info("Latency is %f, throughput is %f", latency, throughput)
+                # will set stop_event on all other ranks
+                dist_ctx.cmd_broadcast(CMD_STOP)
+                stop_event.set()
+            else:
+                stop_event.wait()
+    monitoring.finish()
+
+
+def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Optional[str],
+                     batch_size: int, ubatch_size: int, partition: Optional[List[Tuple[int, int]]],
+                     quant: Optional[List[int]], rank_order: Optional[List[int]], data_rank: int,
+                     hosts: Optional[List[str]], sched_models_file: Optional[str],
+                     sched_dev_types_file: Optional[str], sched_dev_file: Optional[str],
+                     rpc_num_worker_threads: int):
+    """Run the pipeline using RPC communication."""
+    monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
+    monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='confidence')
+    monitoring.add_key(MONITORING_KEY_QUANT_DECODE, work_type='tensors', acc_type='bits')
+    monitoring.add_key(MONITORING_KEY_QUANT_ENCODE, work_type='tensors', acc_type='bits')
+    logger.debug("GLOO Threads: %d", rpc_num_worker_threads)
+    rpc_opts = tensorpipe_rpc_backend_options_factory(num_worker_threads=rpc_num_worker_threads)
+    with DistRpcContext((f"worker{rank}",),
+                        { 'world_size': world_size,
+                          'rank': rank,
+                          'rpc_backend_options': rpc_opts }
+                       ) as dist_ctx:
+        # Send or receive the schedule
+        if rank == 0:
+            stage_layers, stage_quant, stage_ranks = \
+                get_pipeline_sched(world_size, hosts, partition, quant, rank_order,
+                                   model_name, ubatch_size, sched_models_file,
+                                   sched_dev_types_file, sched_dev_file)
+            logger.info("Scheduling: data rank: %s", data_rank)
+            logger.info("Broadcasting schedule")
+            dist_ctx.cmd_broadcast(handle_cmd, CMD_SCHED,
+                                   (torch.tensor(stage_layers),
+                                    torch.tensor(stage_quant),
+                                    torch.tensor(stage_ranks),
+                                    torch.tensor(data_rank)))
+        else:
+            logger.info("Waiting for schedule")
+            stage_layers, stage_quant, stage_ranks, data_rank = sched_q.get()
+            logger.info("Stage layers: %s", stage_layers)
+            logger.info("Stage quant: %s", stage_quant)
+            logger.info("Stage ranks: %s", stage_ranks)
+            logger.info("Data rank: %s", data_rank)
+        if rank == data_rank:
+            inputs = load_inputs(model_name, batch_size)
+            # Create model shards on workers (requires distributed context to be initialized)
+            pipeline = model_cfg.dist_rpc_pipeline_factory(model_name, model_file, stage_ranks,
+                                                           stage_layers, data_rank, handle_results)
+            q_bits = [torch.tensor((0 if s == 0 else stage_quant[s - 1], stage_quant[s]))
+                      for s in range(len(stage_quant))]
+            pipeline.rpc_register_buffer('quant_bits', q_bits)
+            pipeline.rpc_register_forward_hook(devices.forward_hook_to_cpu)
+            pipeline.rpc_register_forward_hook(forward_hook_monitor)
+            pipeline.rpc_register_forward_hook(forward_hook_quant_encode_start, last=False)
+            pipeline.rpc_register_forward_hook(forward_hook_quant_encode, last=False)
+            pipeline.rpc_register_forward_hook(forward_hook_quant_encode_finish, last=False)
+            pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode_start, first=False)
+            pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode, first=False)
+            pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode_finish, first=False)
+            pipeline.rpc_register_forward_pre_hook(forward_pre_hook_monitor)
+            pipeline.rpc_register_forward_pre_hook(devices.forward_pre_hook_to_device)
+            tik_data = time.time()
+            # start results monitoring - see comments in handle_results
+            monitoring.iteration(MONITORING_KEY_OUTPUT, work=0, accuracy=0, safe=False)
+            # this call is asynchronous - wait for results to get end-to-end timings
+            start_count = results_counter.value
+            pipeline.enqueue_batch(inputs, ubatch_size)
+            results_counter.wait_gte(start_count + len(inputs))
+            tok_data = time.time()
+            latency = tok_data - tik_data
+            throughput = batch_size / latency
+            logger.info("Latency is %f, throughput is %f", latency, throughput)
+    monitoring.finish()
+
+
 def main():
     """Main function."""
     #########################################################
@@ -371,25 +528,12 @@ def main():
     #########################################################
     #                 Configuration for Network             #
     #########################################################
-    world_size = args.worldsize
-    rank = args.rank
     os.environ['MASTER_ADDR'] = args.addr # MASTER_ADDR
     os.environ['MASTER_PORT'] = args.port # MASTER_PORT
     os.environ["TP_SOCKET_IFNAME"] = args.socket_ifname # SOCKET_IFNAME
     os.environ["GLOO_SOCKET_IFNAME"] = args.socket_ifname # SOCKET_IFNAME
-    num_worker_threads = args.worker_threads
     # ***********************  End  **************************#
 
-    model_name = args.model_name
-    model_file = args.model_file
-    if model_file is None:
-        model_file = model_cfg.get_model_default_weights_file(model_name)
-    batch_size = args.batch_size
-    ubatch_size = args.ubatch_size
-
-    # The master rank computes schedule, then:
-    # (1) with comm='p2p': distributes it, then each stage initializes their own stage context
-    # (2) with comm='rpc': the rank assigned to stage 0 instantiates the pipeline
     if args.partition is None:
         partition = None
     else:
@@ -399,146 +543,18 @@ def main():
     quant = None if args.quant is None else [int(i) for i in args.quant.split(',')]
     rank_order = None if args.rank_order is None else [int(i) for i in args.rank_order.split(',')]
     hosts = None if args.hosts is None else args.hosts.split(',')
-    if rank == 0:
-        stage_layers, stage_quant, stage_ranks = \
-            get_pipeline_sched(world_size, hosts, partition, quant, rank_order,
-                               model_name, ubatch_size, args.sched_models_file,
-                               args.sched_dev_types_file, args.sched_dev_file)
-        data_rank = args.data_rank
-        logger.info("Scheduling: data rank: %s", data_rank)
-
-    monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
-    monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='confidence')
-    monitoring.add_key(MONITORING_KEY_QUANT_DECODE, work_type='tensors', acc_type='bits')
-    monitoring.add_key(MONITORING_KEY_QUANT_ENCODE, work_type='tensors', acc_type='bits')
     tik = time.time()
     if args.comm == 'p2p':
-        monitoring.add_key(MONITORING_KEY_RECV, work_type='Mbits')
-        monitoring.add_key(MONITORING_KEY_SEND, work_type='Mbits')
-        # Initialize the distributed P2P context
-        with DistP2pContext(('gloo',), { 'world_size': world_size, 'rank': rank }, handle_cmd) \
-            as dist_ctx:
-            # Send or receive the schedule
-            if rank == 0:
-                logger.info("Broadcasting schedule")
-                dist_ctx.cmd_broadcast(CMD_SCHED,
-                                       (torch.tensor(stage_layers),
-                                        torch.tensor(stage_quant),
-                                        torch.tensor(stage_ranks),
-                                        torch.tensor(data_rank)))
-            else:
-                logger.info("Waiting for schedule")
-                stage_layers, stage_quant, stage_ranks, data_rank = sched_q.get()
-                logger.info("Stage layers: %s", stage_layers)
-                logger.info("Stage quant: %s", stage_quant)
-                logger.info("Stage ranks: %s", stage_ranks)
-                logger.info("Data rank: %s", data_rank)
-            # Create model shard locally
-            try:
-                stage = stage_ranks.index(rank)
-            except ValueError:
-                # we're not assigned a stage at this time
-                stage = None
-            if stage is None:
-                model = None
-            else:
-                model = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage][0],
-                                                       stage_layers[stage][1], stage)
-                q_bits = torch.tensor((0 if stage == 0 else stage_quant[stage - 1], stage_quant[stage]))
-                model.register_buffer('quant_bits', q_bits)
-                model.register_forward_hook(devices.forward_hook_to_cpu)
-                model.register_forward_hook(forward_hook_monitor)
-                if stage != len(stage_ranks) - 1:
-                    model.register_forward_hook(forward_hook_quant_encode_start)
-                    model.register_forward_hook(forward_hook_quant_encode)
-                    model.register_forward_hook(forward_hook_quant_encode_finish)
-                if stage != 0:
-                    model.register_forward_pre_hook(forward_pre_hook_quant_decode_start)
-                    model.register_forward_pre_hook(forward_pre_hook_quant_decode)
-                    model.register_forward_pre_hook(forward_pre_hook_quant_decode_finish)
-                model.register_forward_pre_hook(forward_pre_hook_monitor)
-                model.register_forward_pre_hook(devices.forward_pre_hook_to_device)
-            # Initialize the stage context
-            with model_cfg.dist_p2p_pipeline_stage_factory(stage_ranks, data_rank, rank, stage,
-                                                           model, handle_results) as stage_ctx:
-                stage_ctx.register_recv_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_RECV,))
-                stage_ctx.register_recv_post_hook(p2p_post_hook_monitor, (MONITORING_KEY_RECV,))
-                stage_ctx.register_send_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_SEND,))
-                stage_ctx.register_send_post_hook(p2p_post_hook_monitor, (MONITORING_KEY_SEND,))
-                if rank == data_rank:
-                    inputs = load_inputs(model_name, batch_size)
-                    tik_data = time.time()
-                    # start results monitoring - see comments in handle_results
-                    monitoring.iteration(MONITORING_KEY_OUTPUT, work=0, accuracy=0, safe=False)
-                    # this call is asynchronous - wait for results to get end-to-end timings
-                    start_count = results_counter.value
-                    stage_ctx.enqueue_batch(inputs, ubatch_size)
-                    results_counter.wait_gte(start_count + len(inputs))
-                    tok_data = time.time()
-                    latency = tok_data - tik_data
-                    throughput = batch_size / latency
-                    logger.info("Latency is %f, throughput is %f", latency, throughput)
-                    # will set stop_event on all other ranks
-                    dist_ctx.cmd_broadcast(CMD_STOP)
-                    stop_event.set()
-                else:
-                    stop_event.wait()
+        run_pipeline_p2p(args.worldsize, args.rank, args.model_name, args.model_file,
+                         args.batch_size, args.ubatch_size, partition, quant, rank_order,
+                         args.data_rank, hosts, args.sched_models_file, args.sched_dev_types_file,
+                         args.sched_dev_file)
     else:
-        # Initialize the distributed RPC context
-        logger.debug("GLOO Threads: %d", num_worker_threads)
-        rpc_opts = tensorpipe_rpc_backend_options_factory(num_worker_threads=num_worker_threads)
-        with DistRpcContext((f"worker{rank}",),
-                            { 'world_size': world_size,
-                              'rank': rank,
-                              'rpc_backend_options': rpc_opts }
-                           ) as dist_ctx:
-            # Send or receive the schedule
-            if rank == 0:
-                logger.info("Broadcasting schedule")
-                dist_ctx.cmd_broadcast(handle_cmd, CMD_SCHED,
-                                       (torch.tensor(stage_layers),
-                                        torch.tensor(stage_quant),
-                                        torch.tensor(stage_ranks),
-                                        torch.tensor(data_rank)))
-            else:
-                logger.info("Waiting for schedule")
-                stage_layers, stage_quant, stage_ranks, data_rank = sched_q.get()
-                logger.info("Stage layers: %s", stage_layers)
-                logger.info("Stage quant: %s", stage_quant)
-                logger.info("Stage ranks: %s", stage_ranks)
-                logger.info("Data rank: %s", data_rank)
-            if rank == data_rank:
-                inputs = load_inputs(model_name, batch_size)
-                # Create model shards on workers (requires distributed context to be initialized)
-                pipeline = model_cfg.dist_rpc_pipeline_factory(model_name, model_file, stage_ranks,
-                                                               stage_layers, data_rank,
-                                                               handle_results)
-                q_bits = [torch.tensor((0 if s == 0 else stage_quant[s - 1], stage_quant[s]))
-                          for s in range(len(stage_quant))]
-                pipeline.rpc_register_buffer('quant_bits', q_bits)
-                pipeline.rpc_register_forward_hook(devices.forward_hook_to_cpu)
-                pipeline.rpc_register_forward_hook(forward_hook_monitor)
-                pipeline.rpc_register_forward_hook(forward_hook_quant_encode_start, last=False)
-                pipeline.rpc_register_forward_hook(forward_hook_quant_encode, last=False)
-                pipeline.rpc_register_forward_hook(forward_hook_quant_encode_finish, last=False)
-                pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode_start, first=False)
-                pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode, first=False)
-                pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode_finish, first=False)
-                pipeline.rpc_register_forward_pre_hook(forward_pre_hook_monitor)
-                pipeline.rpc_register_forward_pre_hook(devices.forward_pre_hook_to_device)
-                tik_data = time.time()
-                # start results monitoring - see comments in handle_results
-                monitoring.iteration(MONITORING_KEY_OUTPUT, work=0, accuracy=0, safe=False)
-                # this call is asynchronous - wait for results to get end-to-end timings
-                start_count = results_counter.value
-                pipeline.enqueue_batch(inputs, ubatch_size)
-                results_counter.wait_gte(start_count + len(inputs))
-                tok_data = time.time()
-                latency = tok_data - tik_data
-                throughput = batch_size / latency
-                logger.info("Latency is %f, throughput is %f", latency, throughput)
+        run_pipeline_rpc(args.worldsize, args.rank, args.model_name, args.model_file,
+                         args.batch_size, args.ubatch_size, partition, quant, rank_order,
+                         args.data_rank, hosts, args.sched_models_file, args.sched_dev_types_file,
+                         args.sched_dev_file, args.worker_threads)
     tok = time.time()
-    monitoring.finish()
     logger.info("Total program execution time = %f", tok - tik)
 
 
