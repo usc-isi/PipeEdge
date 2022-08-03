@@ -130,7 +130,9 @@ class DistRpcPipeline:
 
     def rpc_register_buffer(self, name: str, tensors: List[Optional[torch.Tensor]]) -> None:
         """Add buffers to RPC modules."""
-        assert len(tensors) == len(self._rref_list)
+        if len(tensors) != len(self._rref_list):
+            raise ValueError(f"tensors length ({len(tensors)}) doesn't match pipeline length "
+                             f"({len(self._rref_list)})")
         futs = [rref.rpc_async().mod_register_buffer(name, tensor)
                 for rref, tensor in zip(self._rref_list, tensors)]
         torch.futures.wait_all(futs)

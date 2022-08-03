@@ -5,6 +5,7 @@
 #include <getopt.h>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
