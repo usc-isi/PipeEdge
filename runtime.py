@@ -81,11 +81,11 @@ def forward_hook_quant_encode_finish(module, inputs, _outputs) -> None:
     n_items = models.get_microbatch_size(inputs[0], verify=True) if quant_bits > 0 else 0
     monitoring.iteration(MONITORING_KEY_QUANT_ENCODE, work=n_items, accuracy=quant_bits)
 
-def p2p_pre_hook_monitor(key):
+def p2p_pre_hook_monitor(key: str) -> None:
     """Register send/recv start."""
     monitoring.iteration_start(key)
 
-def p2p_post_hook_monitor(tensors, key):
+def p2p_post_hook_monitor(tensors: Tuple[torch.Tensor, ...], key: str) -> None:
     """Register send/recv completion."""
     assert isinstance(tensors, tuple)
     # Measure work in total data size (MBits), which is a useful metric for data transfers.
@@ -95,28 +95,28 @@ def p2p_post_hook_monitor(tensors, key):
     monitoring.iteration(key, work=mbits)
 
 
-class ThreadSafeCounter():
+class ThreadSafeCounter:
     """Thread-safe counter."""
 
-    def __init__(self, value=0):
+    def __init__(self, value: int=0):
         self._value = value
         self._cond = threading.Condition()
 
     @property
-    def value(self):
+    def value(self) -> int:
         """Current counter value."""
         with self._cond:
             val = self._value
             self._cond.notify_all()
         return val
 
-    def add(self, quantity=1):
+    def add(self, quantity: int=1) -> None:
         """Add to counter atomically."""
         with self._cond:
             self._value += quantity
             self._cond.notify_all()
 
-    def wait_gte(self, threshold):
+    def wait_gte(self, threshold: int) -> None:
         """Wait until counter >= threshold."""
         with self._cond:
             while self._value < threshold:
@@ -128,7 +128,7 @@ results_counter = ThreadSafeCounter()
 ## for verification
 # from transformers import ViTForImageClassification
 # origin_model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224')
-def handle_results(tensors: torch.Tensor):
+def handle_results(tensors: torch.Tensor) -> None:
     """Process result tensors"""
     # Monitoring here is intended to measure time between results, NOT end-to-end pipeline latency.
     # Here we use a traditional Application Heartbeats approach, without an explicit start.
@@ -146,7 +146,8 @@ def handle_results(tensors: torch.Tensor):
     # logger.info("Predicted class: %s", origin_model.config.id2label[predicted_class_idx])
 
 
-def parse_yaml_sched(sched: List[dict], hosts: Optional[List[str]]):
+def parse_yaml_sched(sched: List[dict], hosts: Optional[List[str]]) -> \
+    Tuple[List[Tuple[int, int]], List[int]]:
     """Parse the YAML schedule into `stage_layers` and `stage_ranks`."""
     # list of single-entry maps
     assert isinstance(sched, list)
@@ -176,7 +177,7 @@ def parse_yaml_sched(sched: List[dict], hosts: Optional[List[str]]):
     return stage_layers, stage_ranks
 
 
-def _get_default_quant(n_stages: int):
+def _get_default_quant(n_stages: int) -> List[int]:
     return [0] * n_stages
 
 
@@ -184,8 +185,9 @@ def get_pipeline_sched(world_size: int, hosts: Optional[List[str]],
                        partition: Optional[List[Tuple[int, int]]], quant: Optional[List[int]],
                        rank_order: Optional[List[int]], model_name: str, microbatch_size: int,
                        s_models_file: Optional[str], s_dev_types_file: Optional[str],
-                       s_dev_file: Optional[str]):
-    """Get the pipeline schedule."""
+                       s_dev_file: Optional[str]) -> \
+    Tuple[List[Tuple[int, int]], List[int], List[int]]:
+    """Get the pipeline schedule: `stage_layers`, `stage_quant`, and `stage_ranks`."""
     if partition:
         # User specified the stage layers
         logger.info("Scheduling: using user-defined partitioning")
@@ -244,7 +246,7 @@ def get_pipeline_sched(world_size: int, hosts: Optional[List[str]],
     return stage_layers, stage_quant, stage_ranks
 
 
-def load_inputs(model_name, batch_size):
+def load_inputs(model_name: str, batch_size: int) -> torch.Tensor:
     """Load inputs based on model."""
     if model_name in ['bert-base-uncased', 'bert-large-uncased']:
         with np.load("bert_input.npz") as bert_inputs:
@@ -268,7 +270,7 @@ def load_inputs(model_name, batch_size):
 
 sched_q = queue.Queue()
 stop_event = threading.Event()
-def handle_cmd(cmd: int, tensors: Tuple[torch.Tensor, ...]):
+def handle_cmd(cmd: int, tensors: Tuple[torch.Tensor, ...]) -> None:
     """Process received commands."""
     if cmd == CMD_STOP:
         logger.info("handle_cmd: stop")
@@ -284,7 +286,7 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
                      batch_size: int, ubatch_size: int, partition: Optional[List[Tuple[int, int]]],
                      quant: Optional[List[int]], rank_order: Optional[List[int]], data_rank: int,
                      hosts: Optional[List[str]], sched_models_file: Optional[str],
-                     sched_dev_types_file: Optional[str], sched_dev_file: Optional[str]):
+                     sched_dev_types_file: Optional[str], sched_dev_file: Optional[str]) -> None:
     """Run the pipeline using P2P communication."""
     monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
     monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='confidence')
@@ -372,7 +374,7 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
                      quant: Optional[List[int]], rank_order: Optional[List[int]], data_rank: int,
                      hosts: Optional[List[str]], sched_models_file: Optional[str],
                      sched_dev_types_file: Optional[str], sched_dev_file: Optional[str],
-                     rpc_num_worker_threads: int):
+                     rpc_num_worker_threads: int) -> None:
     """Run the pipeline using RPC communication."""
     monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
     monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='confidence')
@@ -437,7 +439,7 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
     monitoring.finish()
 
 
-def init_env(device: Optional[str], net_addr: str, net_port: int, net_ifname: str):
+def init_env(device: Optional[str], net_addr: str, net_port: int, net_ifname: str) -> None:
     """Initialize the PyTorch environment."""
     # Device
     if device is not None:
@@ -464,7 +466,7 @@ def init_env(device: Optional[str], net_addr: str, net_port: int, net_ifname: st
     os.environ["GLOO_SOCKET_IFNAME"] = net_ifname # SOCKET_IFNAME
 
 
-def main():
+def main() -> None:
     """Main function."""
     #########################################################
     #                 Check Enviroment Settings             #
