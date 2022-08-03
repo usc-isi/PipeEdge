@@ -437,6 +437,33 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
     monitoring.finish()
 
 
+def init_env(device: Optional[str], net_addr: str, net_port: int, net_ifname: str):
+    """Initialize the PyTorch environment."""
+    # Device
+    if device is not None:
+        devices.DEVICE = torch.device(device)
+    logger.info("Device: %s", devices.DEVICE)
+    if devices.DEVICE is not None and devices.DEVICE.type == 'cuda':
+        torch.cuda.init()
+    else:
+        # Workaround for PyTorch RPC comm initialization automatically enabling CUDA
+        # See: https://github.com/pytorch/pytorch/issues/80141
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+    # Parallelism
+    # parallel_threads = 2
+    # torch.set_num_threads(parallel_threads)
+    # torch.set_num_interop_threads(parallel_threads)
+    logger.debug("# parallel intra nodes threads: %d", torch.get_num_threads())
+    logger.debug("# parallel inter nodes threads: %d", torch.get_num_interop_threads())
+
+    # Network
+    os.environ['MASTER_ADDR'] = net_addr # MASTER_ADDR
+    os.environ['MASTER_PORT'] = str(net_port) # MASTER_PORT
+    os.environ["TP_SOCKET_IFNAME"] = net_ifname # SOCKET_IFNAME
+    os.environ["GLOO_SOCKET_IFNAME"] = net_ifname # SOCKET_IFNAME
+
+
 def main():
     """Main function."""
     #########################################################
@@ -456,7 +483,7 @@ def main():
                         help="socket interface name, use [ifconfig | ipaddress] to check")
     parser.add_argument("--addr", type=str, default="127.0.0.1",
                         help="ip address for the master node")
-    parser.add_argument("--port", type=str, default="29500",
+    parser.add_argument("--port", type=int, default=29500,
                         help="communication port for the master node")
     # Communication options
     parser.add_argument("-c", "--comm", type=str, default="rpc",
@@ -509,31 +536,6 @@ def main():
                              "devices <= HOSTS")
     args = parser.parse_args()
 
-    if args.device is not None:
-        devices.DEVICE = torch.device(args.device)
-    logger.info("Device: %s", devices.DEVICE)
-    if devices.DEVICE is not None and devices.DEVICE.type == 'cuda':
-        torch.cuda.init()
-    else:
-        # Workaround for PyTorch RPC comm initialization automatically enabling CUDA
-        # See: https://github.com/pytorch/pytorch/issues/80141
-        os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
-    # parallel_threads = 2
-    # torch.set_num_threads(parallel_threads)
-    # torch.set_num_interop_threads(parallel_threads)
-    logger.debug("# parallel intra nodes threads: %d", torch.get_num_threads())
-    logger.debug("# parallel inter nodes threads: %d", torch.get_num_interop_threads())
-
-    #########################################################
-    #                 Configuration for Network             #
-    #########################################################
-    os.environ['MASTER_ADDR'] = args.addr # MASTER_ADDR
-    os.environ['MASTER_PORT'] = args.port # MASTER_PORT
-    os.environ["TP_SOCKET_IFNAME"] = args.socket_ifname # SOCKET_IFNAME
-    os.environ["GLOO_SOCKET_IFNAME"] = args.socket_ifname # SOCKET_IFNAME
-    # ***********************  End  **************************#
-
     if args.partition is None:
         partition = None
     else:
@@ -543,7 +545,9 @@ def main():
     quant = None if args.quant is None else [int(i) for i in args.quant.split(',')]
     rank_order = None if args.rank_order is None else [int(i) for i in args.rank_order.split(',')]
     hosts = None if args.hosts is None else args.hosts.split(',')
+
     tik = time.time()
+    init_env(args.device, args.addr, args.port, args.socket_ifname)
     if args.comm == 'p2p':
         run_pipeline_p2p(args.worldsize, args.rank, args.model_name, args.model_file,
                          args.batch_size, args.ubatch_size, partition, quant, rank_order,
