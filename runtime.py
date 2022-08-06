@@ -62,7 +62,7 @@ def forward_pre_hook_quant_decode_start(_module, _inputs) -> None:
 def forward_pre_hook_quant_decode_finish(module, inputs) -> None:
     """Register quantization decode completion."""
     # Measure work as the microbatch size, but quantization only does work if quant_bits > 0.
-    quant_bits = module.quant_bits.tolist()[0]
+    quant_bits = module.quant_bit.item()
     assert isinstance(inputs, tuple)
     n_items = models.get_microbatch_size(inputs[0], verify=True) if quant_bits > 0 else 0
     monitoring.iteration(MONITORING_KEY_QUANT_DECODE, work=n_items, accuracy=quant_bits)
@@ -76,7 +76,7 @@ def forward_hook_quant_encode_finish(module, inputs, _outputs) -> None:
     # Measure work as the microbatch size, but quantization only does work if quant_bits > 0.
     # If output tensors are encoded, they're collapsed s.t. we can't infer the microbatch size.
     # We'll rely on the inputs instead.
-    quant_bits = module.quant_bits.tolist()[1]
+    quant_bits = module.quant_bit.item()
     assert isinstance(inputs, tuple)
     n_items = models.get_microbatch_size(inputs[0], verify=True) if quant_bits > 0 else 0
     monitoring.iteration(MONITORING_KEY_QUANT_ENCODE, work=n_items, accuracy=quant_bits)
@@ -327,8 +327,8 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
         else:
             model = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage][0],
                                                    stage_layers[stage][1], stage)
-            q_bits = torch.tensor((0 if stage == 0 else stage_quant[stage - 1], stage_quant[stage]))
-            model.register_buffer('quant_bits', q_bits)
+            q_bit = torch.tensor(stage_quant[stage])
+            model.register_buffer('quant_bit', q_bit)
             model.register_forward_hook(devices.forward_hook_to_cpu)
             model.register_forward_hook(forward_hook_monitor)
             if stage != len(stage_ranks) - 1:
@@ -412,9 +412,9 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
             # Create model shards on workers (requires distributed context to be initialized)
             pipeline = model_cfg.dist_rpc_pipeline_factory(model_name, model_file, stage_ranks,
                                                            stage_layers, data_rank, handle_results)
-            q_bits = [torch.tensor((0 if s == 0 else stage_quant[s - 1], stage_quant[s]))
+            q_bit = [torch.tensor(stage_quant[s])
                       for s in range(len(stage_quant))]
-            pipeline.rpc_register_buffer('quant_bits', q_bits)
+            pipeline.rpc_register_buffer('quant_bit', q_bit)
             pipeline.rpc_register_forward_hook(devices.forward_hook_to_cpu)
             pipeline.rpc_register_forward_hook(forward_hook_monitor)
             pipeline.rpc_register_forward_hook(forward_hook_quant_encode_start, last=False)
