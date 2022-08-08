@@ -54,9 +54,7 @@ pip install -e .[tools]
 Download model weight files (ViT files are from [Google Cloud](https://console.cloud.google.com/storage/browser/vit_models)):
 
 ```sh
-python tools/bert_save_weights.py
-python tools/deit_save_weights.py
-python tools/vit_save_weights.py
+python save_model_weights.py
 ```
 
 ### Optional dependencies:

@@ -52,6 +52,14 @@ def get_model_default_weights_file(model_name: str) -> str:
     """Get a model's default weights file name."""
     return _MODEL_CONFIGS[model_name]['weights_file']
 
+def save_model_weights_file(model_name: str, model_file: Optional[str]=None) -> None:
+    """Save a model's weights file."""
+    if model_file is None:
+        model_file = get_model_default_weights_file(model_name)
+    # This works b/c all shard implementations have the same save_weights interface
+    module = _MODEL_CONFIGS[model_name]['shard_module']
+    module.save_weights(model_name, model_file)
+
 def module_shard_factory(model_name: str, model_file: Optional[str], layer_start: int,
                          layer_end: int, stage: int) -> ModuleShard:
     """Get a shard instance on the globally-configured `devices.DEVICE`."""

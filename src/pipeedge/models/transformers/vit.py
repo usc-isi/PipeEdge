@@ -3,7 +3,9 @@ import logging
 import math
 import os
 import time
+from typing import Optional
 import numpy as np
+import requests
 import torch
 from torch import nn
 from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput, ViTIntermediate, ViTOutput
@@ -11,6 +13,12 @@ from . import TransformerShard, TransformerShardData
 
 
 logger = logging.getLogger(__name__)
+
+_WEIGHTS_URLS = {
+    'google/vit-base-patch16-224': 'https://storage.googleapis.com/vit_models/imagenet21k%2Bimagenet2012/ViT-B_16-224.npz',
+    'google/vit-large-patch16-224': 'https://storage.googleapis.com/vit_models/imagenet21k%2Bimagenet2012/ViT-L_16-224.npz',
+    'google/vit-huge-patch14-224-in21k': 'https://storage.googleapis.com/vit_models/imagenet21k/ViT-H_14.npz',
+}
 
 
 def _forward_kernel(layer, x, skip, kernel_id):
@@ -280,3 +288,18 @@ class ViTTransformerShard(TransformerShard):
         if self.end_layer % 2 == 0:
             return x
         return x, skip
+
+    @staticmethod
+    def save_weights(model_name: str, model_file: str, url: Optional[str]=None) -> None:
+        """Save the model weights file."""
+        if url is None:
+            url = _WEIGHTS_URLS[model_name]
+        logger.info('Downloading model: %s: %s', model_name, url)
+        req = requests.get(url, stream=True)
+        req.raise_for_status()
+        with open(model_file, 'wb') as file:
+            for chunk in req.iter_content(chunk_size=8192):
+                if chunk:
+                    file.write(chunk)
+                    file.flush()
+                    os.fsync(file.fileno())

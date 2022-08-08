@@ -5,6 +5,7 @@ import time
 import numpy as np
 import torch
 from torch import nn
+from transformers import AutoModel
 from transformers.models.bert.modeling_bert import BertEmbeddings, BertPooler, BertSelfAttention, BertSelfOutput, BertIntermediate, BertOutput, BertLayer
 from . import TransformerShard, TransformerShardData
 
@@ -263,3 +264,13 @@ class BertTransformerShard(TransformerShard):
         if self.end_layer % 2 == 0:
             return x
         return x, skip
+
+    @staticmethod
+    def save_weights(model_name: str, model_file: str) -> None:
+        """Save the model weights file."""
+        model = AutoModel.from_pretrained(model_name)
+        state_dict = model.state_dict()
+        weights = {}
+        for key, val in state_dict.items():
+            weights[key] = val
+        np.savez(model_file, **weights)
