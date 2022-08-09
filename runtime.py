@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 ## ground truth: Egyptian cat
 IMG_URL = 'http://images.cocodataset.org/val2017/000000039769.jpg'
+IMG_LABEL_IDX = 285
 
 CMD_STOP = 0
 CMD_SCHED = 1
@@ -161,10 +162,8 @@ class ThreadSafeCounter:
 
 
 results_counter = ThreadSafeCounter()
+label_queue = queue.Queue()
 
-## for verification
-# from transformers import ViTForImageClassification
-# origin_model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224')
 def handle_results(tensors: torch.Tensor) -> None:
     """Process result tensors"""
     # Monitoring here is intended to measure time between results, NOT end-to-end pipeline latency.
@@ -173,14 +172,20 @@ def handle_results(tensors: torch.Tensor) -> None:
     # when the pipeline is initialized), otherwise metrics from the first report will be lost.
     # Measure work as the microbatch size.
     n_items = models.get_microbatch_size(tensors, verify=True)
-    # Measure accuracy as the prediction confidence values.
-    # Use softmax to get probability distribution for each tensor.
-    prob_sum = torch.nn.functional.softmax(tensors, dim=-1).max(dim=-1)[0].sum().item()
-    monitoring.iteration(MONITORING_KEY_OUTPUT, work=n_items, accuracy=prob_sum, safe=False)
+    if label_queue.empty():
+        # RPC comm doesn't guarantee microbatch ordering, so it can't reliably check labels.
+        # Measure accuracy as the prediction confidence values.
+        # Use softmax to get probability distribution for each tensor.
+        acc = torch.nn.functional.softmax(tensors, dim=-1).max(dim=-1)[0].sum().item()
+    else:
+        # Measure accuracy based on label (microbatch ordering must be enforced for correctness).
+        ubatch_labels = label_queue.get()
+        assert len(tensors) == len(ubatch_labels)
+        pred = tensors.argmax(dim=1)
+        acc = pred.eq(ubatch_labels).sum().item()
+    monitoring.iteration(MONITORING_KEY_OUTPUT, work=n_items, accuracy=acc, safe=False)
     logger.info("outputs is %s", tensors)
     results_counter.add(n_items)
-    # predicted_class_idx = tensors[0].argmax(-1).item()
-    # logger.info("Predicted class: %s", origin_model.config.id2label[predicted_class_idx])
 
 
 def parse_yaml_sched(sched: List[dict], hosts: Optional[List[str]]) -> \
@@ -283,12 +288,13 @@ def get_pipeline_sched(world_size: int, hosts: Optional[List[str]],
     return stage_layers, stage_quant, stage_ranks
 
 
-def load_inputs(model_name: str, batch_size: int) -> torch.Tensor:
+def load_inputs(model_name: str, batch_size: int) -> Tuple[torch.Tensor, torch.tensor]:
     """Load inputs based on model."""
     if model_name in ['bert-base-uncased', 'bert-large-uncased',
                       'textattack/bert-base-uncased-CoLA']:
         with np.load("bert_input.npz") as bert_inputs:
-            inputs_sentence = list(bert_inputs['input'][0: batch_size])
+            inputs_sentence = list(bert_inputs['input'][:batch_size])
+            labels = torch.tensor(bert_inputs['label'][:batch_size])
         tokenizer = BertTokenizer.from_pretrained(model_name)
         inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
     else:
@@ -303,7 +309,8 @@ def load_inputs(model_name: str, batch_size: int) -> torch.Tensor:
         image = Image.open(requests.get(IMG_URL, stream=True).raw)
         imgs = [image for i in range(batch_size)]
         inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
-    return inputs
+        labels = torch.tensor([IMG_LABEL_IDX] * batch_size)
+    return (inputs, labels)
 
 
 sched_q = queue.Queue()
@@ -327,7 +334,7 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
                      sched_dev_types_file: Optional[str], sched_dev_file: Optional[str]) -> None:
     """Run the pipeline using P2P communication."""
     monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
-    monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='confidence')
+    monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='correct')
     monitoring.add_key(MONITORING_KEY_QUANT_DECODE, work_type='tensors', acc_type='bits')
     monitoring.add_key(MONITORING_KEY_QUANT_ENCODE, work_type='tensors', acc_type='bits')
     monitoring.add_key(MONITORING_KEY_RECV, work_type='Mbits')
@@ -387,12 +394,14 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
             stage_ctx.register_send_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_SEND,))
             stage_ctx.register_send_post_hook(p2p_post_hook_monitor, (MONITORING_KEY_SEND,))
             if rank == data_rank:
-                inputs = load_inputs(model_name, batch_size)
+                inputs, labels = load_inputs(model_name, batch_size)
                 tik_data = time.time()
                 # start results monitoring - see comments in handle_results
                 monitoring.iteration(MONITORING_KEY_OUTPUT, work=0, accuracy=0, safe=False)
                 # this call is asynchronous - wait for results to get end-to-end timings
                 start_count = results_counter.value
+                for ubatch_labels in labels.split(ubatch_size):
+                    label_queue.put(ubatch_labels)
                 stage_ctx.enqueue_batch(inputs, ubatch_size)
                 results_counter.wait_gte(start_count + len(inputs))
                 tok_data = time.time()
@@ -446,7 +455,7 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
             logger.info("Stage ranks: %s", stage_ranks)
             logger.info("Data rank: %s", data_rank)
         if rank == data_rank:
-            inputs = load_inputs(model_name, batch_size)
+            inputs, _ = load_inputs(model_name, batch_size)
             # Create model shards on workers (requires distributed context to be initialized)
             pipeline = model_cfg.dist_rpc_pipeline_factory(model_name, model_file, stage_ranks,
                                                            stage_layers, data_rank, handle_results)
