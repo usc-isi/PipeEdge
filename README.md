@@ -44,19 +44,17 @@ python3 -m venv .venv
 . .venv/bin/activate
 ```
 
-Install the development package, Python package dependencies, and tools dependencies with:
+Install the development package, Python package dependencies, and runtime application dependencies with:
 
 ```sh
 pip install -U pip
-pip install -e .[tools]
+pip install -e .[runtime]
 ```
 
 Download model weight files (ViT files are from [Google Cloud](https://console.cloud.google.com/storage/browser/vit_models)):
 
 ```sh
-python tools/bert_save_weights.py
-python tools/deit_save_weights.py
-python tools/vit_save_weights.py
+python save_model_weights.py
 ```
 
 ### Optional dependencies:

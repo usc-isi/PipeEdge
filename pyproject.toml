@@ -14,19 +14,19 @@ dependencies = [
     "apphb>=0.1.0",
     "energymon>=0.1.0",
     "numpy",
-    "Pillow",
     "psutil",
     "PyYAML",
     "requests",
+    "timm>=0.3.2",
     "torch>=1.8.0",
     "transformers>=4.6.0",
 ]
 
 [project.optional-dependencies]
-# Required by the project source "tools" directory
-tools = [
+# Required by applications and tools not in the pipeedge package
+runtime = [
     "datasets>=1.0.2",
-    "timm>=0.3.2",
+    "Pillow",
 ]
 
 [build-system]

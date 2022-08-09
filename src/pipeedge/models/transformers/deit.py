@@ -2,6 +2,7 @@
 import logging
 import math
 import time
+from typing import Optional
 import numpy as np
 import torch
 from torch import nn
@@ -11,6 +12,12 @@ from . import TransformerShard, TransformerShardData
 
 
 logger = logging.getLogger(__name__)
+
+_HUB_MODEL_NAMES = {
+    'facebook/deit-base-distilled-patch16-224': 'deit_base_distilled_patch16_224',
+    'facebook/deit-small-distilled-patch16-224': 'deit_small_distilled_patch16_224',
+    'facebook/deit-tiny-distilled-patch16-224': 'deit_tiny_distilled_patch16_224',
+}
 
 
 def _forward_kernel(layer, x, skip, kernel_id):
@@ -276,3 +283,22 @@ class DeiTTransformerShard(TransformerShard):
         if self.end_layer % 2 == 0:
             return x
         return x, skip
+
+    # NOTE: repo has a dependency on the timm package, which isn't an automatic torch dependency
+    @staticmethod
+    def save_weights(model_name: str, model_file: str, hub_repo: str='facebookresearch/deit:main',
+                     hub_model_name: Optional[str]=None) -> None:
+        """Save the model weights file."""
+        if hub_model_name is None:
+            if model_name in _HUB_MODEL_NAMES:
+                hub_model_name = _HUB_MODEL_NAMES[model_name]
+                logger.debug("Mapping model name to torch hub equivalent: %s: %s", model_name,
+                             hub_model_name)
+            else:
+                hub_model_name = model_name
+        model = torch.hub.load(hub_repo, hub_model_name, pretrained=True)
+        state_dict = model.state_dict()
+        weights = {}
+        for key, val in state_dict.items():
+            weights[key] = val
+        np.savez(model_file, **weights)
