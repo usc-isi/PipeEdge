@@ -1,6 +1,8 @@
 """ Basic operations used for Quantization """
+from typing import Tuple
 import numpy as np
 import torch
+from torch import Tensor, stack
 
 def _quant_op(input_data, bit, mode='original'):
     """
@@ -130,9 +132,10 @@ def tensor_encode(input_data, quant_bit):
     shape = torch.tensor(shape, dtype = torch.int32)
     scale_factor = torch.tensor(scale_factor, dtype = torch.float32)
     shift = torch.tensor(shift, dtype = torch.float32)
+    quant_bit = torch.tensor(quant_bit, dtype = torch.int8)
 
     # scale_factor is needed to restore the tensor
-    return [comm_tensor, shape, scale_factor, shift]
+    return [comm_tensor, shape, scale_factor, shift, quant_bit]
 
 
 def tensor_decode(comm_tensor, input_shape, scale_factor, shift, quant_bit):
@@ -148,6 +151,24 @@ def tensor_decode(comm_tensor, input_shape, scale_factor, shift, quant_bit):
     input_shape = input_shape.tolist()
     scale_factor = scale_factor.item()
     shift = shift.item()
+    quant_bit = quant_bit.item()
     restore_int_map = _intmap_decode(comm_tensor, input_shape, quant_bit)
     restore_tensor = _intmap2float(restore_int_map, quant_bit)
     return torch.from_numpy((restore_tensor*scale_factor+shift).astype(np.float32))
+
+
+def tensor_encode_outerdim(batched_tensor: Tensor, quant_bit: int):
+    """do quantization on each image in the micro-batched tensor with size [b,c,h,w]"""
+    list_of_lists = [tensor_encode(t, quant_bit) for t in batched_tensor]
+    encoded_tensors = list(zip(*list_of_lists))
+    return [stack(t,0) for t in encoded_tensors]
+
+
+def tensor_decode_outerdim(compressed_tuple: Tuple):
+    """decode the encoded tensor with multiple images in one batch, each encoded image data is in length of 5"""
+    batched_tensor_list = []
+    data_tensors, input_shapes, scale_factors, shift_factors, quant_bits =\
+        compressed_tuple[0], compressed_tuple[1], compressed_tuple[2], compressed_tuple[3], compressed_tuple[4]
+    for idx, data_tensor in enumerate(data_tensors):
+        batched_tensor_list.append(tensor_decode(data_tensor, input_shapes[idx], scale_factors[idx], shift_factors[idx], quant_bits[idx]))
+    return stack(batched_tensor_list, 0)

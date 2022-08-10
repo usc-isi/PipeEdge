@@ -6,16 +6,18 @@ import queue
 import sys
 import threading
 import time
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 import numpy as np
 from PIL import Image
 import requests
 import torch
+from torch import Tensor
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 from pipeedge.comm.p2p import DistP2pContext
 from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
 from pipeedge import models
-from pipeedge.quantization.hook import forward_hook_quant_encode, forward_pre_hook_quant_decode
+from pipeedge.quantization.basic_op import tensor_encode_outerdim, tensor_decode_outerdim
+from pipeedge.quantization.clamp_op import clamp_PTQ_GeLU, clamp_PTQ_RB2019
 from pipeedge.sched.scheduler import sched_pipeline
 import devices
 import model_cfg
@@ -80,6 +82,41 @@ def forward_hook_quant_encode_finish(module, inputs, _outputs) -> None:
     assert isinstance(inputs, tuple)
     n_items = models.get_microbatch_size(inputs[0], verify=True) if quant_bits > 0 else 0
     monitoring.iteration(MONITORING_KEY_QUANT_ENCODE, work=n_items, accuracy=quant_bits)
+
+def forward_hook_quant_encode(module, _input_arg, output: Union[Tensor, Tuple[Tensor, ...]]):
+    """encode tensor in the forward hook (after each module)"""
+    if isinstance(output, Tensor):
+        output = (output,)
+    assert isinstance(output, tuple)
+    quant_bit = module.quant_bit.item()
+    comm_tuple = []
+    for tensor in output:
+        assert isinstance(tensor, Tensor)
+        clamp = clamp_PTQ_RB2019 if tensor.min()<0.2 else clamp_PTQ_GeLU
+        clamped_tensor = clamp(tensor, quant_bit)
+        stacked_tensor = tensor_encode_outerdim(clamped_tensor, quant_bit)
+        comm_tuple += stacked_tensor
+    return tuple(comm_tuple)
+
+def forward_pre_hook_quant_decode(module, input_arg: Tuple[Tuple[Tensor, ...]]):
+    """decode tensor in the preforward hook (before each module)"""
+    assert isinstance(input_arg, tuple)
+    assert len(input_arg) == 1
+    # input_tensor: len=5x for x tensors encoded as: comm_tensor, input_shape, scale_factor, shift, quant_bit
+    input_tensors = input_arg[0]
+    assert isinstance(input_tensors, tuple)
+    assert len(input_tensors)%5 == 0
+    forward_tensor = []
+    for i in range(len(input_tensors) // 5):
+        input_tensor = input_tensors[i*5:i*5+5]
+        batched_tensor = tensor_decode_outerdim(input_tensor)
+        forward_tensor.append(batched_tensor)
+    # Return value(s) should be wrapped in an outer tuple, like input_arg
+    # The tuple will be unpacked when forward() is invoked, which must yield a single parameter
+    if len(forward_tensor) == 1:
+        # assume that the original result was a single tensor rather than a tuple w/ len=1
+        return tuple(forward_tensor)
+    return (tuple(forward_tensor),)
 
 def p2p_pre_hook_monitor(key: str) -> None:
     """Register send/recv start."""
