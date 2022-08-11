@@ -7,7 +7,7 @@ from typing import Union
 import numpy as np
 import torch
 from torch import nn
-from transformers import AutoModel
+from transformers import AutoModel, BertForSequenceClassification
 from transformers.models.bert.modeling_bert import BertEmbeddings, BertPooler, BertSelfAttention, BertSelfOutput, BertIntermediate, BertOutput, BertLayer
 from . import TransformerShard, TransformerShardData
 
@@ -275,6 +275,69 @@ class BertTransformerShard(TransformerShard):
     def save_weights(model_name: str, model_file: str) -> None:
         """Save the model weights file."""
         model = AutoModel.from_pretrained(model_name)
+        state_dict = model.state_dict()
+        weights = {}
+        for key, val in state_dict.items():
+            weights[key] = val
+        np.savez(model_file, **weights)
+
+
+class BertTransformerShardForSequenceClassification(TransformerShard):
+    """BERT transformer shard for sequence classification."""
+
+    def __init__(self, stage: int, model_name: str, model_weights: Union[str, Mapping],
+                 is_first: bool, is_last: bool, start_layer: int, end_layer: int,
+                 load_weight: bool=True):
+        super().__init__(stage, model_name, model_weights, is_first, is_last, start_layer, end_layer,
+                         load_weight)
+        self.bert = None
+        self.classifier = None
+
+        logger.debug(">>>> Model name: %s", model_name)
+        if self.load_weight:
+            if isinstance(model_weights, str):
+                logger.debug(">>>> Load weight file: %s", self.model_weights)
+                with np.load(self.model_weights) as weights:
+                    self._make_layer(weights)
+            else:
+                self._make_layer(model_weights)
+        else:
+            self._make_layer(None)
+        logger.info(
+            "======= Finish Build BertTransformerShardForSequenceClassification%d ==========",
+            self.stage)
+
+    def _make_layer(self, weights):
+        # All stages do something with self.bert
+        bert_weights = {}
+        if self.load_weight:
+            # Extract weights for inner BERT model
+            for key, val in weights.items():
+                if key.startswith('bert.'):
+                    bert_weights[key[len('bert.'):]] = val
+        self.bert = BertTransformerShard(self.stage, self.model_name, bert_weights, self.is_first,
+                                         self.is_last, self.start_layer, self.end_layer,
+                                         self.load_weight)
+
+        if self.is_last:
+            self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels)
+            if self.load_weight:
+                with torch.no_grad():
+                    self.classifier.weight.copy_(torch.from_numpy(weights['classifier.weight']))
+                    self.classifier.bias.copy_(torch.from_numpy(weights['classifier.bias']))
+
+    @torch.no_grad()
+    def forward(self, data: TransformerShardData) -> TransformerShardData:
+        """Compute shard layers."""
+        data = self.bert(data)
+        if self.is_last:
+            data = self.classifier(data)
+        return data
+
+    @staticmethod
+    def save_weights(model_name: str, model_file: str) -> None:
+        """Save the model weights file."""
+        model = BertForSequenceClassification.from_pretrained(model_name)
         state_dict = model.state_dict()
         weights = {}
         for key, val in state_dict.items():
