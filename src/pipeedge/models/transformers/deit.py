@@ -1,8 +1,9 @@
 """DeiT Transformers."""
+from collections.abc import Mapping
 import logging
 import math
 import time
-from typing import Optional
+from typing import Optional, Union
 import numpy as np
 import torch
 from torch import nn
@@ -40,7 +41,7 @@ def _forward_kernel(layer, x, skip, kernel_id):
 class DeiTTransformerShard(TransformerShard):
     """DeiT transformer shard."""
 
-    def __init__(self, stage: int, model_name: str, model_weights: str,
+    def __init__(self, stage: int, model_name: str, model_weights: Union[str, Mapping],
                  is_first: bool, is_last: bool, start_layer: int, end_layer: int,
                  load_weight: bool=True):
         super().__init__(stage, model_name, model_weights, is_first, is_last, start_layer, end_layer,
@@ -51,9 +52,12 @@ class DeiTTransformerShard(TransformerShard):
 
         logger.debug(">>>> Model name: %s", model_name)
         if self.load_weight:
-            logger.debug(">>>> Load weight file: %s", self.model_weights)
-            with np.load(self.model_weights) as weights:
-                self._make_layer(weights)
+            if isinstance(model_weights, str):
+                logger.debug(">>>> Load weight file: %s", self.model_weights)
+                with np.load(self.model_weights) as weights:
+                    self._make_layer(weights)
+            else:
+                self._make_layer(model_weights)
         else:
             self._make_layer(None)
 

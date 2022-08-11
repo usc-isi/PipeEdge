@@ -1,4 +1,5 @@
 """Transformers module."""
+from collections.abc import Mapping
 import os
 from typing import Tuple, Type, Union
 import psutil
@@ -13,7 +14,7 @@ class TransformerShard(ModuleShard):
     """Abstract parent class for transformer shards."""
     # pylint: disable=abstract-method
 
-    def __init__(self, stage: int, model_name: str, model_weights: str,
+    def __init__(self, stage: int, model_name: str, model_weights: Union[str, Mapping],
                  is_first: bool, is_last: bool, start_layer: int, end_layer: int,
                  load_weight: bool):
         super().__init__(stage, start_layer, end_layer)

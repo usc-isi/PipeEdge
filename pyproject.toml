@@ -13,7 +13,7 @@ license = { "file" = "LICENSE" }
 dependencies = [
     "apphb>=0.1.0",
     "energymon>=0.1.0",
-    "numpy",
+    "numpy>=1.15.0",
     "psutil",
     "PyYAML",
     "requests",
