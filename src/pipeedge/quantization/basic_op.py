@@ -2,7 +2,6 @@
 from typing import Tuple
 import numpy as np
 import torch
-from torch import Tensor, stack
 
 def _quant_op(input_data, bit, mode='original'):
     """
@@ -157,11 +156,11 @@ def tensor_decode(comm_tensor, input_shape, scale_factor, shift, quant_bit):
     return torch.from_numpy((restore_tensor*scale_factor+shift).astype(np.float32))
 
 
-def tensor_encode_outerdim(batched_tensor: Tensor, quant_bit: int):
+def tensor_encode_outerdim(batched_tensor: torch.Tensor, quant_bit: int):
     """do quantization on each image in the micro-batched tensor with size [b,c,h,w]"""
     list_of_lists = [tensor_encode(t, quant_bit) for t in batched_tensor]
     encoded_tensors = list(zip(*list_of_lists))
-    return [stack(t,0) for t in encoded_tensors]
+    return [torch.stack(t,0) for t in encoded_tensors]
 
 
 def tensor_decode_outerdim(compressed_tuple: Tuple):
@@ -171,4 +170,4 @@ def tensor_decode_outerdim(compressed_tuple: Tuple):
         compressed_tuple[0], compressed_tuple[1], compressed_tuple[2], compressed_tuple[3], compressed_tuple[4]
     for idx, data_tensor in enumerate(data_tensors):
         batched_tensor_list.append(tensor_decode(data_tensor, input_shapes[idx], scale_factors[idx], shift_factors[idx], quant_bits[idx]))
-    return stack(batched_tensor_list, 0)
+    return torch.stack(batched_tensor_list, 0)
