@@ -3,9 +3,7 @@ from typing import Any, Callable, List, Optional, Tuple
 from torch.distributed import rpc as trpc
 from pipeedge.comm import p2p, rpc
 from pipeedge.models import ModuleShard
-from pipeedge.models.transformers.bert import BertTransformerShard
-from pipeedge.models.transformers.deit import DeiTTransformerShard
-from pipeedge.models.transformers.vit import ViTTransformerShard
+from pipeedge.models.transformers import bert, deit, vit
 import devices
 
 _MODEL_CONFIGS = {}
@@ -20,21 +18,21 @@ def _model_cfg_add(name, layers, weights_file, shard_module):
 
 # Transformer blocks can be split 4 ways, e.g., where ViT-Base has 12 layers, we specify 12*4=48
 _model_cfg_add('google/vit-base-patch16-224', 48, 'ViT-B_16-224.npz',
-               ViTTransformerShard)
+               vit.ViTTransformerShard)
 _model_cfg_add('google/vit-large-patch16-224', 96, 'ViT-L_16-224.npz',
-               ViTTransformerShard)
+               vit.ViTTransformerShard)
 _model_cfg_add('google/vit-huge-patch14-224-in21k', 128, 'ViT-H_14.npz',
-               ViTTransformerShard)
+               vit.ViTTransformerShard)
 _model_cfg_add('bert-base-uncased', 48, 'BERT-B.npz',
-               BertTransformerShard)
+               bert.BertTransformerShard)
 _model_cfg_add('bert-large-uncased', 96, 'BERT-L.npz',
-               BertTransformerShard)
+               bert.BertTransformerShard)
 _model_cfg_add('facebook/deit-base-distilled-patch16-224', 48, 'DeiT_B_distilled.npz',
-               DeiTTransformerShard)
+               deit.DeiTTransformerShard)
 _model_cfg_add('facebook/deit-small-distilled-patch16-224', 48, 'DeiT_S_distilled.npz',
-               DeiTTransformerShard)
+               deit.DeiTTransformerShard)
 _model_cfg_add('facebook/deit-tiny-distilled-patch16-224', 48, 'DeiT_T_distilled.npz',
-               DeiTTransformerShard)
+               deit.DeiTTransformerShard)
 
 def get_model_names() -> List[str]:
     """Get a list of available model names."""
