@@ -11,7 +11,6 @@ import numpy as np
 from PIL import Image
 import requests
 import torch
-from torch import Tensor
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 from pipeedge.comm.p2p import DistP2pContext
 from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
@@ -84,22 +83,22 @@ def forward_hook_quant_encode_finish(module, inputs, _outputs) -> None:
     n_items = models.get_microbatch_size(inputs[0], verify=True) if quant_bits > 0 else 0
     monitoring.iteration(MONITORING_KEY_QUANT_ENCODE, work=n_items, accuracy=quant_bits)
 
-def forward_hook_quant_encode(module, _input_arg, output: Union[Tensor, Tuple[Tensor, ...]]):
+def forward_hook_quant_encode(module, _input_arg, output: Union[torch.Tensor, Tuple[torch.Tensor, ...]]):
     """encode tensor in the forward hook (after each module)"""
-    if isinstance(output, Tensor):
+    if isinstance(output, torch.Tensor):
         output = (output,)
     assert isinstance(output, tuple)
     quant_bit = module.quant_bit.item()
     comm_tuple = []
     for tensor in output:
-        assert isinstance(tensor, Tensor)
+        assert isinstance(tensor, torch.Tensor)
         clamp = clamp_banner2019_laplace if tensor.min()<0.2 else clamp_banner2019_gelu
         clamped_tensor = clamp(tensor, quant_bit)
         stacked_tensor = tensor_encode_outerdim(clamped_tensor, quant_bit)
         comm_tuple += stacked_tensor
     return tuple(comm_tuple)
 
-def forward_pre_hook_quant_decode(module, input_arg: Tuple[Tuple[Tensor, ...]]):
+def forward_pre_hook_quant_decode(_module, input_arg: Tuple[Tuple[torch.Tensor, ...]]):
     """decode tensor in the preforward hook (before each module)"""
     assert isinstance(input_arg, tuple)
     assert len(input_arg) == 1
