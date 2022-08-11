@@ -23,10 +23,13 @@ _model_cfg_add('google/vit-large-patch16-224', 96, 'ViT-L_16-224.npz',
                vit.ViTTransformerShard)
 _model_cfg_add('google/vit-huge-patch14-224-in21k', 128, 'ViT-H_14.npz',
                vit.ViTTransformerShard)
+# NOTE: BertTransformerShard alone doesn't do classification
 _model_cfg_add('bert-base-uncased', 48, 'BERT-B.npz',
                bert.BertTransformerShard)
 _model_cfg_add('bert-large-uncased', 96, 'BERT-L.npz',
                bert.BertTransformerShard)
+_model_cfg_add('textattack/bert-base-uncased-CoLA', 48, 'BERT-B-CoLA.npz',
+               bert.BertTransformerShardForSequenceClassification)
 _model_cfg_add('facebook/deit-base-distilled-patch16-224', 48, 'DeiT_B_distilled.npz',
                deit.DeiTTransformerShard)
 _model_cfg_add('facebook/deit-small-distilled-patch16-224', 48, 'DeiT_S_distilled.npz',

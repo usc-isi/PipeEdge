@@ -285,7 +285,8 @@ def get_pipeline_sched(world_size: int, hosts: Optional[List[str]],
 
 def load_inputs(model_name: str, batch_size: int) -> torch.Tensor:
     """Load inputs based on model."""
-    if model_name in ['bert-base-uncased', 'bert-large-uncased']:
+    if model_name in ['bert-base-uncased', 'bert-large-uncased',
+                      'textattack/bert-base-uncased-CoLA']:
         with np.load("bert_input.npz") as bert_inputs:
             inputs_sentence = list(bert_inputs['input'][0: batch_size])
         tokenizer = BertTokenizer.from_pretrained(model_name)
