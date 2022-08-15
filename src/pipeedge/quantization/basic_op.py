@@ -111,8 +111,10 @@ def tensor_encode(input_data, quant_bit):
         The input to the encoder should be a torch.Tensor
         We first cast it to a np.array, then do everything else
     """
+    quant_bit_tensor = torch.tensor(quant_bit, dtype = torch.int8)
     if quant_bit == 0:
-        return [input_data, torch.tensor(input_data.shape), torch.tensor(1.0), torch.tensor(0.0)]
+        return [input_data, torch.tensor(input_data.shape), torch.tensor(1.0), torch.tensor(0.0),
+                quant_bit_tensor]
 
     input_data = input_data.numpy()
     shape = input_data.shape
@@ -131,10 +133,9 @@ def tensor_encode(input_data, quant_bit):
     shape = torch.tensor(shape, dtype = torch.int32)
     scale_factor = torch.tensor(scale_factor, dtype = torch.float32)
     shift = torch.tensor(shift, dtype = torch.float32)
-    quant_bit = torch.tensor(quant_bit, dtype = torch.int8)
 
     # scale_factor is needed to restore the tensor
-    return [comm_tensor, shape, scale_factor, shift, quant_bit]
+    return [comm_tensor, shape, scale_factor, shift, quant_bit_tensor]
 
 
 def tensor_decode(comm_tensor, input_shape, scale_factor, shift, quant_bit):
