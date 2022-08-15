@@ -94,10 +94,14 @@ def _log_global(key):
     logger.info("%s: Global Acc Rate: %s %s/sec",
                 key, _monitor_ctx.get_global_accuracy_rate(key=key), _acc_types[key])
 
+def get_window_size() -> int:
+    """Get the window size."""
+    return int(os.getenv(ENV_WINDOW_SIZE, str(_WINDOW_SIZE)))
+
 def init(key: str, work_type: str='items', acc_type: str='acc') -> None:
     """Create monitoring context."""
     global _monitor_ctx # pylint: disable=global-statement,invalid-name
-    window_size = int(os.getenv(ENV_WINDOW_SIZE, str(_WINDOW_SIZE)))
+    window_size = get_window_size()
     log_name = key + '.csv'
     log_mode = os.getenv(ENV_CSV_FILE_MODE, _CSV_FILE_MODE)
     try:
