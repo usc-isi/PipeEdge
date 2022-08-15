@@ -22,12 +22,6 @@ import devices
 import model_cfg
 import monitoring
 
-# torch.multiprocessing.set_sharing_strategy('file_system')
-logging.basicConfig(filename='runtime.log', level=logging.DEBUG)
-console_hndlr = logging.StreamHandler(sys.stdout)
-console_hndlr.setFormatter(logging.Formatter(fmt='%(message)s'))
-console_hndlr.setLevel(logging.INFO)
-logging.getLogger().addHandler(console_hndlr)
 logger = logging.getLogger(__name__)
 
 ## ground truth: Egyptian cat
@@ -612,4 +606,9 @@ def main() -> None:
 
 
 if __name__=="__main__":
+    logging.basicConfig(filename='runtime.log', level=logging.DEBUG)
+    console_hndlr = logging.StreamHandler(sys.stdout)
+    console_hndlr.setFormatter(logging.Formatter(fmt='%(message)s'))
+    console_hndlr.setLevel(logging.INFO)
+    logging.getLogger().addHandler(console_hndlr)
     main()
