@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 # this really does need to be a global variable (pylint incorrectly assumes it's a constant)
 _monitor_ctx = None # pylint: disable=invalid-name
+_monitor_ctx_lock = threading.Lock()
 
 # Per-thread iteration contexts
 # key: thread ident, value: dict (key: key, value: MonitorIterationContext)
@@ -98,7 +99,7 @@ def get_window_size() -> int:
     """Get the window size."""
     return int(os.getenv(ENV_WINDOW_SIZE, str(_WINDOW_SIZE)))
 
-def init(key: str, work_type: str='items', acc_type: str='acc') -> None:
+def _init(key: str, work_type: str='items', acc_type: str='acc') -> None:
     """Create monitoring context."""
     global _monitor_ctx # pylint: disable=global-statement,invalid-name
     window_size = get_window_size()
@@ -126,7 +127,11 @@ def init(key: str, work_type: str='items', acc_type: str='acc') -> None:
     _work_types[key] = work_type
     _acc_types[key] = acc_type
 
-def finish() -> None:
+def init(key: str, work_type: str='items', acc_type: str='acc') -> None:
+    with _monitor_ctx_lock:
+        return _init(key, work_type, acc_type)
+
+def _finish() -> None:
     """Destroy monitoring context."""
     global _monitor_ctx # pylint: disable=global-statement,invalid-name
     if _monitor_ctx is None:
@@ -141,7 +146,11 @@ def finish() -> None:
     _work_types.clear()
     _acc_types.clear()
 
-def add_key(key: str, work_type: str='items', acc_type: str='acc') -> None:
+def finish() -> None:
+    with _monitor_ctx_lock:
+        _finish()
+
+def _add_key(key: str, work_type: str='items', acc_type: str='acc') -> None:
     """Add a new key."""
     if _monitor_ctx is None:
         return
@@ -149,6 +158,10 @@ def add_key(key: str, work_type: str='items', acc_type: str='acc') -> None:
     _locks[key] = threading.Lock()
     _work_types[key] = work_type
     _acc_types[key] = acc_type
+
+def add_key(key: str, work_type: str='items', acc_type: str='acc') -> None:
+    with _monitor_ctx_lock:
+        _add_key(key, work_type, acc_type)
 
 def _iter_ctx_push(key):
     ident = threading.get_ident()
@@ -171,14 +184,18 @@ def _iter_ctx_pop(key):
         del _thr_ctx[ident]
     return iter_ctx
 
-def iteration_start(key: str) -> None:
+def _iteration_start(key: str) -> None:
     """Start an iteration."""
     if _monitor_ctx is None:
         return
     with _locks[key]:
         _monitor_ctx.iteration_start(iter_ctx=_iter_ctx_push(key))
 
-def iteration(key: str, work: int=1, accuracy: Union[int, float]=0, safe: bool=True) -> None:
+def iteration_start(key: str) -> None:
+    with _monitor_ctx_lock:
+        _iteration_start(key)
+
+def _iteration(key: str, work: int=1, accuracy: Union[int, float]=0, safe: bool=True) -> None:
     """Complete an iteration."""
     if _monitor_ctx is None:
         return
@@ -200,3 +217,7 @@ def iteration(key: str, work: int=1, accuracy: Union[int, float]=0, safe: bool=T
             if _PRINT_FIELDS_WINDOW:
                 if tag > 0 and (tag + 1) % _WINDOW_SIZE == 0:
                     _log_window(key)
+
+def iteration(key: str, work: int=1, accuracy: Union[int, float]=0, safe: bool=True) -> None:
+    with _monitor_ctx_lock:
+        _iteration(key, work, accuracy, safe)
