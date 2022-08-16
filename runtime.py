@@ -6,11 +6,12 @@ import queue
 import sys
 import threading
 import time
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Sequence, Tuple, Union
 import numpy as np
 from PIL import Image
 import requests
 import torch
+from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 from pipeedge.comm.p2p import DistP2pContext
 from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
@@ -282,7 +283,7 @@ def get_pipeline_sched(world_size: int, hosts: Optional[List[str]],
     return stage_layers, stage_quant, stage_ranks
 
 
-def load_inputs(model_name: str, batch_size: int) -> Tuple[torch.Tensor, torch.tensor]:
+def load_dataset(model_name: str, batch_size: int, indices: Optional[Sequence]=None) -> Dataset:
     """Load inputs based on model."""
     if model_name in ['bert-base-uncased', 'bert-large-uncased',
                       'textattack/bert-base-uncased-CoLA']:
@@ -291,6 +292,7 @@ def load_inputs(model_name: str, batch_size: int) -> Tuple[torch.Tensor, torch.t
             labels = torch.tensor(bert_inputs['label'][:batch_size])
         tokenizer = BertTokenizer.from_pretrained(model_name)
         inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
+        dataset = TensorDataset(inputs, labels)
     else:
         if model_name in ['facebook/deit-base-distilled-patch16-224',
                           'facebook/deit-small-distilled-patch16-224',
@@ -304,7 +306,10 @@ def load_inputs(model_name: str, batch_size: int) -> Tuple[torch.Tensor, torch.t
         imgs = [image for i in range(batch_size)]
         inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
         labels = torch.tensor([IMG_LABEL_IDX] * batch_size)
-    return (inputs, labels)
+        dataset = TensorDataset(inputs, labels)
+    if indices is not None:
+        dataset = Subset(dataset, indices)
+    return dataset
 
 
 sched_q = queue.Queue()
@@ -388,16 +393,17 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
             stage_ctx.register_send_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_SEND,))
             stage_ctx.register_send_post_hook(p2p_post_hook_monitor, (MONITORING_KEY_SEND,))
             if rank == data_rank:
-                inputs, labels = load_inputs(model_name, batch_size)
+                dataset = load_dataset(model_name, batch_size)
+                data_loader = DataLoader(dataset, batch_size=ubatch_size)
                 tik_data = time.time()
                 # start results monitoring - see comments in handle_results
                 monitoring.iteration(MONITORING_KEY_OUTPUT, work=0, accuracy=0, safe=False)
                 # this call is asynchronous - wait for results to get end-to-end timings
                 start_count = results_counter.value
-                for ubatch_labels in labels.split(ubatch_size):
+                for ubatch, ubatch_labels in data_loader:
                     label_queue.put(ubatch_labels)
-                stage_ctx.enqueue_batch(inputs, ubatch_size)
-                results_counter.wait_gte(start_count + len(inputs))
+                    stage_ctx.enqueue_batch(ubatch, len(ubatch))
+                results_counter.wait_gte(start_count + len(dataset))
                 tok_data = time.time()
                 latency = tok_data - tik_data
                 throughput = batch_size / latency
@@ -449,7 +455,8 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
             logger.info("Stage ranks: %s", stage_ranks)
             logger.info("Data rank: %s", data_rank)
         if rank == data_rank:
-            inputs, _ = load_inputs(model_name, batch_size)
+            dataset = load_dataset(model_name, batch_size)
+            data_loader = DataLoader(dataset, batch_size=ubatch_size)
             # Create model shards on workers (requires distributed context to be initialized)
             pipeline = model_cfg.dist_rpc_pipeline_factory(model_name, model_file, stage_ranks,
                                                            stage_layers, data_rank, handle_results)
@@ -471,8 +478,9 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
             monitoring.iteration(MONITORING_KEY_OUTPUT, work=0, accuracy=0, safe=False)
             # this call is asynchronous - wait for results to get end-to-end timings
             start_count = results_counter.value
-            pipeline.enqueue_batch(inputs, ubatch_size)
-            results_counter.wait_gte(start_count + len(inputs))
+            for ubatch, _ in data_loader:
+                pipeline.enqueue_batch(ubatch, len(ubatch))
+            results_counter.wait_gte(start_count + len(dataset))
             tok_data = time.time()
             latency = tok_data - tik_data
             throughput = batch_size / latency
