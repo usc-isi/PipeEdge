@@ -157,6 +157,18 @@ class ThreadSafeCounter:
             while self._value < threshold:
                 self._cond.wait()
 
+    def reset(self, value: int=0) -> None:
+        """Reset counter value."""
+        with self._cond:
+            self._value = value
+            self._cond.notify_all()
+
+# To wait to start data flow, reset to value=0; add to value to start
+data_start_counter = ThreadSafeCounter(1)
+# To pause data flow, reset to value=0; add to value to resume
+data_pause_counter = ThreadSafeCounter(1)
+# To stop data flow, add to value
+data_stop_counter = ThreadSafeCounter(0)
 
 results_counter = ThreadSafeCounter()
 label_queue = queue.Queue()
@@ -427,15 +439,21 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
                     dataset = load_dataset(model_name, batch_size)
                 data_loader = DataLoader(dataset, batch_size=ubatch_size,
                                          num_workers=dataloader_num_workers)
+                data_start_counter.wait_gte(1)
                 tik_data = time.time()
                 # start results monitoring - see comments in handle_results
                 monitoring.iteration(MONITORING_KEY_OUTPUT, work=0, accuracy=0, safe=False)
                 # this call is asynchronous - wait for results to get end-to-end timings
                 start_count = results_counter.value
+                total_items = 0
                 for ubatch, ubatch_labels in data_loader:
+                    data_pause_counter.wait_gte(1)
+                    if data_stop_counter.value > 0:
+                        break
                     label_queue.put(ubatch_labels)
                     stage_ctx.enqueue_tensor(ubatch)
-                results_counter.wait_gte(start_count + len(dataset))
+                    total_items += len(ubatch)
+                results_counter.wait_gte(start_count + total_items)
                 tok_data = time.time()
                 latency = tok_data - tik_data
                 throughput = batch_size / latency
