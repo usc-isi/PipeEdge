@@ -27,6 +27,8 @@ dependencies = [
 runtime = [
     "datasets>=1.0.2",
     "Pillow",
+    "scipy",
+    "torchvision>=0.3.0",
 ]
 
 [build-system]

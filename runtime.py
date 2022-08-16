@@ -3,6 +3,7 @@ import argparse
 import logging
 import os
 import queue
+import random
 import sys
 import threading
 import time
@@ -12,6 +13,7 @@ from PIL import Image
 import requests
 import torch
 from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset
+from torchvision.datasets import ImageNet
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 from pipeedge.comm.p2p import DistP2pContext
 from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
@@ -283,6 +285,28 @@ def get_pipeline_sched(world_size: int, hosts: Optional[List[str]],
     return stage_layers, stage_quant, stage_ranks
 
 
+def load_dataset_subset(dataset: Dataset, batch_size: int, shuffle: bool=False) -> Dataset:
+    """Get a Dataset subset."""
+    if shuffle:
+        indices = [random.randint(0, len(dataset)) for _ in range(batch_size)]
+    else:
+        indices = list(range(batch_size))
+    return Subset(dataset, indices)
+
+
+def load_dataset_imagenet(model_name: str, root: str, split: str='train') -> Dataset:
+    """Get the ImageNet dataset."""
+    if model_name.startswith('facebook/deit'):
+        feature_extractor = DeiTFeatureExtractor.from_pretrained(model_name)
+    else:
+        feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
+    def transform(img):
+        pixels = feature_extractor(images=img.convert('RGB'), return_tensors='pt')['pixel_values']
+        # feature extractor expects a batch but we only have a single image, so drop the outer dim
+        return pixels[0]
+    return ImageNet(root, split=split, transform=transform)
+
+
 def load_dataset(model_name: str, batch_size: int, indices: Optional[Sequence]=None) -> Dataset:
     """Load inputs based on model."""
     if model_name in ['bert-base-uncased', 'bert-large-uncased',
@@ -330,7 +354,10 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
                      batch_size: int, ubatch_size: int, partition: Optional[List[Tuple[int, int]]],
                      quant: Optional[List[int]], rank_order: Optional[List[int]], data_rank: int,
                      hosts: Optional[List[str]], sched_models_file: Optional[str],
-                     sched_dev_types_file: Optional[str], sched_dev_file: Optional[str]) -> None:
+                     sched_dev_types_file: Optional[str], sched_dev_file: Optional[str],
+                     dataset_name: Optional[str]=None, dataset_root: Optional[str]=None,
+                     dataset_split: Optional[str]=None, dataset_shuffle: bool=False,
+                     dataloader_num_workers: int=0) -> None:
     """Run the pipeline using P2P communication."""
     monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
     monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='correct')
@@ -393,8 +420,13 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
             stage_ctx.register_send_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_SEND,))
             stage_ctx.register_send_post_hook(p2p_post_hook_monitor, (MONITORING_KEY_SEND,))
             if rank == data_rank:
-                dataset = load_dataset(model_name, batch_size)
-                data_loader = DataLoader(dataset, batch_size=ubatch_size)
+                if dataset_name == "ImageNet":
+                    dataset = load_dataset_imagenet(model_name, dataset_root, split=dataset_split)
+                    dataset = load_dataset_subset(dataset, batch_size, shuffle=dataset_shuffle)
+                else:
+                    dataset = load_dataset(model_name, batch_size)
+                data_loader = DataLoader(dataset, batch_size=ubatch_size,
+                                         num_workers=dataloader_num_workers)
                 tik_data = time.time()
                 # start results monitoring - see comments in handle_results
                 monitoring.iteration(MONITORING_KEY_OUTPUT, work=0, accuracy=0, safe=False)
@@ -551,6 +583,22 @@ def main() -> None:
     # Input options
     parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
     parser.add_argument("-u", "--ubatch-size", default=8, type=int, help="microbatch size")
+    # Data loader options
+    # num_workers > 0 is slow to break the processing for loop after data [sub]set completes
+    parser.add_argument("--dataloader-num-workers", default=0, type=int,
+                        help="dataloader worker threads (0 uses the main thread)")
+    # Dataset options
+    dset = parser.add_argument_group('Dataset arguments')
+    dset.add_argument("--dataset-name", type=str, choices=['ImageNet'],
+                      help="dataset to use")
+    dset.add_argument("--dataset-root", type=str,
+                      help="dataset root directory (e.g., for ImageNet, must contain "
+                           "'ILSVRC2012_devkit_t12.tar.gz' and at least one of: "
+                           "'ILSVRC2012_img_train.tar', 'ILSVRC2012_img_val.tar'")
+    dset.add_argument("--dataset-split", default='train', type=str,
+                      help="dataset split (depends on dataset), e.g.: train, val, test")
+    dset.add_argument("--dataset-shuffle", default=False, type=bool,
+                      help="dataset shuffle")
     # Scheduling options (grouped)
     usched = parser.add_argument_group('User-defined scheduling')
     usched.add_argument("-pt", "--partition", type=str,
@@ -603,7 +651,8 @@ def main() -> None:
         run_pipeline_p2p(args.worldsize, args.rank, args.model_name, args.model_file,
                          args.batch_size, args.ubatch_size, partition, quant, rank_order,
                          args.data_rank, hosts, args.sched_models_file, args.sched_dev_types_file,
-                         args.sched_dev_file)
+                         args.sched_dev_file, args.dataset_name, args.dataset_root,
+                         args.dataset_split, args.dataset_shuffle, args.dataloader_num_workers)
     else:
         run_pipeline_rpc(args.worldsize, args.rank, args.model_name, args.model_file,
                          args.batch_size, args.ubatch_size, partition, quant, rank_order,
