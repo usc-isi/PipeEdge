@@ -402,7 +402,7 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
                 start_count = results_counter.value
                 for ubatch, ubatch_labels in data_loader:
                     label_queue.put(ubatch_labels)
-                    stage_ctx.enqueue_batch(ubatch, len(ubatch))
+                    stage_ctx.enqueue_tensor(ubatch)
                 results_counter.wait_gte(start_count + len(dataset))
                 tok_data = time.time()
                 latency = tok_data - tik_data
@@ -479,7 +479,7 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
             # this call is asynchronous - wait for results to get end-to-end timings
             start_count = results_counter.value
             for ubatch, _ in data_loader:
-                pipeline.enqueue_batch(ubatch, len(ubatch))
+                pipeline.enqueue_tensor(ubatch)
             results_counter.wait_gte(start_count + len(dataset))
             tok_data = time.time()
             latency = tok_data - tik_data

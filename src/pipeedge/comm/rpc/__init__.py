@@ -156,8 +156,7 @@ class DistRpcPipeline:
         futs.append(self._rref_list[-1].rpc_async().set_results(results_to, results_cb))
         torch.futures.wait_all(futs)
 
-    def enqueue_batch(self, inputs: torch.Tensor, split_size: int) -> None:
+    def enqueue_tensor(self, tensor: torch.Tensor) -> None:
         """Insert data into the front of the pipeline."""
-        for ubatch in iter(inputs.split(split_size, dim=0)):
-            self._rref_list[0].rpc_sync().wait_for_ready()
-            self._rref_list[0].rpc_async().__call__(ubatch)
+        self._rref_list[0].rpc_sync().wait_for_ready()
+        self._rref_list[0].rpc_async().__call__(tensor)

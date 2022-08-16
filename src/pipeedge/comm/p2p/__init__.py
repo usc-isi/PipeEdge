@@ -316,7 +316,7 @@ class DistP2pPipelineStage:
 
     Because there is (at most) one receiver thread, only one rank may specify `results_cb` and
     that rank must not have a `work_cb` (be a stage) in the middle of the work pipeline.
-    If it's the first work stage, that rank must also be the data source feeding `enqueue_batch`
+    If it's the first work stage, that rank must also be the data source feeding `enqueue_tensor`
     (i.e., not receive inputs from a rank outside the work pipeline).
     If it's the last work stage, then `rank_dst` must be `None`, otherwise the results processing
     thread and sender thread would race for the data produced by the work thread.
@@ -401,13 +401,12 @@ class DistP2pPipelineStage:
     def __exit__(self, *args):
         self.shutdown()
 
-    def enqueue_batch(self, inputs: torch.Tensor, split_size: int) -> None:
+    def enqueue_tensor(self, tensor: torch.Tensor) -> None:
         """Insert data into the pipeline."""
         assert self._initialized
-        for input_chunk in iter(inputs.split(split_size, dim=0)):
-            queue_in = self._queues['in']
-            with queue_in.condition:
-                while queue_in.full():
-                    queue_in.condition.wait()
-                queue_in.put(input_chunk)
-                queue_in.condition.notify_all()
+        queue_in = self._queues['in']
+        with queue_in.condition:
+            while queue_in.full():
+                queue_in.condition.wait()
+            queue_in.put(tensor)
+            queue_in.condition.notify_all()
