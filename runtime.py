@@ -195,6 +195,11 @@ data_pause_counter = ThreadSafeCounter(1)
 # To stop data flow, add to value
 data_stop_counter = ThreadSafeCounter(0)
 
+def _unblock_pipeline():
+    data_stop_counter.add()
+    data_pause_counter.add()
+    data_start_counter.add()
+
 results_counter = ThreadSafeCounter()
 label_queue = queue.Queue()
 
@@ -598,9 +603,6 @@ class WorkerSignals(QObject):
 
     Supported signals are:
 
-    finished
-        No data
-
     error
         tuple (exctype, value, traceback.format_exc() )
 
@@ -608,7 +610,6 @@ class WorkerSignals(QObject):
         object data returned from processing, anything
 
     '''
-    finished = pyqtSignal()  # QtCore.pyqtSignal
     # error = pyqtSignal(tuple)
     result = pyqtSignal(object)
 
@@ -645,9 +646,7 @@ class Worker(QRunnable):
         '''
 
         # Retrieve args/kwargs here; and fire processing using them
-        result = self.fn(*self.args, **self.kwargs)
-        self.signals.result.emit(result)  # Return the result of the processing
-        self.signals.finished.emit()
+        self.fn(*self.args, **self.kwargs)
 
 class MainWindow(QMainWindow):
     """GUI main window"""
@@ -685,11 +684,15 @@ class MainWindow(QMainWindow):
         pagelayout.addLayout(figs_layout)
         pagelayout.addLayout(button_layout)
 
-        self.btn = QPushButton("start")
-        self.btn.pressed.connect(self.start_task)
-        button_layout.addWidget(self.btn)
+        self.strt_btn = QPushButton("Start")
+        self.strt_btn.pressed.connect(self.start_task)
+        button_layout.addWidget(self.strt_btn)
 
-        self.stp_btn = QPushButton("stop")
+        self.pause_btn = QPushButton("Pause")
+        self.pause_btn.pressed.connect(self.pause_task)
+        button_layout.addWidget(self.pause_btn)
+
+        self.stp_btn = QPushButton("Stop")
         self.stp_btn.pressed.connect(self.stop_task)
         button_layout.addWidget(self.stp_btn)
 
@@ -697,14 +700,17 @@ class MainWindow(QMainWindow):
         widget.setLayout(pagelayout)
         self.setCentralWidget(widget)
 
-        self.worker = Worker(self.execute_this_fn)
+        self.worker = Worker(self.poll_fig_data)
         self.worker.signals.result.connect(self.update_plot)
-        self.worker.signals.finished.connect(lambda: self.btn.setEnabled(True))
         self.threadpool = QThreadPool()
+        self.threadpool.start(self.worker)
 
-        self.threadactive = False
-        self.end_thread = False
-        self.thread_ended = False
+        self.end_thread = threading.Event()
+
+    def closeEvent(self, event):
+        _unblock_pipeline()
+        self.end_thread.set()
+        event.accept()
 
     def init_plot(self, x=0, y=0):
         # plot data: x, y values
@@ -729,36 +735,34 @@ class MainWindow(QMainWindow):
                 self.graphWidgets[i*self.ROW_NUM_FIGS+j].setYRange(self.maxmin_ys[i*self.ROW_NUM_FIGS+j][0], self.maxmin_ys[i*self.ROW_NUM_FIGS+j][1], padding=0)
                 self.plots[i*self.ROW_NUM_FIGS+j].setData(x, y)
 
-    def start_task(self):
-        self.btn.setEnabled(False)
-        self.stp_btn.setEnabled(True)
-        self.threadactive = True
-        if self.threadpool.activeThreadCount() == 0:
-            self.threadpool.start(self.worker)
-
-    def execute_this_fn(self, result_callback):
-        for _ in range(PLOT_DATAPOINT_NUMBER*10):
-            if self.end_thread:
+    def poll_fig_data(self, result_callback):
+        while True:
+            time.sleep(PLOT_TIME_INTERVAL)
+            if self.end_thread.is_set():
                 break
-            if self.threadactive:
-                time.sleep(PLOT_TIME_INTERVAL)
-                perf_data = fetch_data_from_runtime()
-                if perf_data is not None:
-                    for i in range(self.ROW_NUM_FIGS):
-                        for j in range(self.COL_NUM_FIGS):
-                            self.results[i*self.ROW_NUM_FIGS+j] = perf_data[i*self.ROW_NUM_FIGS+j]
-                if len(self.results[0]) > PLOT_DATAPOINT_NUMBER:
-                    self.results.map(lambda x: x[-PLOT_DATAPOINT_NUMBER:])
-                result_callback.emit(self.results)
-            else:
-                time.sleep(PLOT_TIME_INTERVAL)
-                continue
-        self.thread_ended = True
+            perf_data = fetch_data_from_runtime()
+            if perf_data is not None:
+                for i in range(self.ROW_NUM_FIGS):
+                    for j in range(self.COL_NUM_FIGS):
+                        self.results[i*self.ROW_NUM_FIGS+j] = perf_data[i*self.ROW_NUM_FIGS+j]
+            if len(self.results[0]) > PLOT_DATAPOINT_NUMBER:
+                self.results.map(lambda x: x[-PLOT_DATAPOINT_NUMBER:])
+            result_callback.emit(self.results)
+
+    def start_task(self):
+        data_start_counter.add()
+        self.strt_btn.setEnabled(False)
+
+    def pause_task(self):
+        if self.pause_btn.text() == "Pause":
+            data_pause_counter.reset()
+            self.pause_btn.setText("Resume")
+        else:
+            data_pause_counter.add()
+            self.pause_btn.setText("Pause")
 
     def stop_task(self):
-        self.threadactive = False
-        self.btn.setEnabled(True)
-        self.stp_btn.setEnabled(False)
+        _unblock_pipeline()
 
 
 def fetch_data_from_runtime():
@@ -892,6 +896,7 @@ def main() -> None:
 
     # construct monitor panel
     if args.gui:
+        data_start_counter.reset()
         app = QApplication([""])
         window = MainWindow()
         window.show()
