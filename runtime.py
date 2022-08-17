@@ -77,7 +77,9 @@ def forward_hook_monitor(module, _inputs, outputs) -> None:
     # Measure accuracy as the number of layers processed
     n_layers = module.end_layer - module.start_layer + 1
     monitoring.iteration(MONITORING_KEY_MODEL, work=n_items, accuracy=n_layers)
-    monitoring_model_perf.append(monitoring._monitor_ctx.get_window_perf(key = MONITORING_KEY_MODEL))
+    with monitoring._monitor_ctx_lock:
+        perf = monitoring._monitor_ctx.get_window_perf(key=MONITORING_KEY_MODEL)
+    monitoring_model_perf.append(perf)
 
 def forward_pre_hook_quant_decode_start(_module, _inputs) -> None:
     """Register quantization decode start."""
@@ -154,7 +156,9 @@ def p2p_post_hook_monitor(tensors: Tuple[torch.Tensor, ...], key: str) -> None:
     # Accuracy has no meaning here.
     monitoring.iteration(key, work=mbits)
     if key == MONITORING_KEY_SEND:
-        monitoring_send_perf.append(monitoring._monitor_ctx.get_window_perf(key = MONITORING_KEY_SEND))
+        with monitoring._monitor_ctx_lock:
+            perf = monitoring._monitor_ctx.get_window_perf(key=MONITORING_KEY_SEND)
+        monitoring_send_perf.append(perf)
 
 
 
@@ -228,10 +232,13 @@ def handle_results(tensors: torch.Tensor) -> None:
     monitoring.iteration(MONITORING_KEY_OUTPUT, work=n_items, accuracy=acc, safe=False)
     logger.info("outputs is %s", tensors)
     results_counter.add(n_items)
-    monitoring_output_perf.append(monitoring._monitor_ctx.get_window_perf(key = MONITORING_KEY_OUTPUT))
-    count = monitoring._monitor_ctx.get_tag(key = MONITORING_KEY_OUTPUT)
-    window_size = monitoring._monitor_ctx.get_window_size(key = MONITORING_KEY_OUTPUT)
-    acc_percentage = monitoring._monitor_ctx.get_window_accuracy(key = MONITORING_KEY_OUTPUT) / min(count, window_size)
+    with monitoring._monitor_ctx_lock:
+        perf = monitoring._monitor_ctx.get_window_perf(key=MONITORING_KEY_OUTPUT)
+        acc = monitoring._monitor_ctx.get_window_accuracy(key=MONITORING_KEY_OUTPUT)
+        count = monitoring._monitor_ctx.get_tag(key=MONITORING_KEY_OUTPUT)
+        window_size = monitoring._monitor_ctx.get_window_size(key=MONITORING_KEY_OUTPUT)
+    monitoring_output_perf.append(perf)
+    acc_percentage = acc / min(count, window_size)
     monitoring_output_acc.append(acc_percentage)
 
 
@@ -772,8 +779,6 @@ class MainWindow(QMainWindow):
 
 
 def fetch_data_from_runtime():
-    if monitoring._monitor_ctx is None:
-        return None
     return (
         monitoring_model_perf,
         monitoring_output_perf,
