@@ -782,6 +782,7 @@ def main() -> None:
     # Positional arguments
     parser.add_argument("rank", type=int, help="the rank for the current node")
     parser.add_argument("worldsize", type=int, help="the world size (the number of nodes)")
+    parser.add_argument("-g", "--gui", action='store_true', help="use GUI")
     # Device options
     parser.add_argument("-d", "--device", type=str, default=None,
                         help="compute device type to use, with optional ordinal, "
@@ -890,7 +891,7 @@ def main() -> None:
     t.start()
 
     # construct monitor panel
-    if args.rank == 0:
+    if args.gui:
         app = QApplication([""])
         window = MainWindow()
         window.show()
