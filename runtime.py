@@ -61,7 +61,10 @@ monitoring_model_perf = [0.,]
 monitoring_output_perf = [0.,]
 monitoring_output_acc = [0.,]
 monitoring_send_perf = [0.,]
-fig_titles = ["model_perf", "output_perf", "output_acc", "send_perf"]
+fig_titles = [ "Model Shard Performance (items/sec)",
+               "Pipeline Performance (classifications/sec)",
+               "Pipeline Accuracy (% correct classifications)",
+               "Send Bandwidth (Mbps)" ]
 
 def forward_pre_hook_monitor(_module, _inputs) -> None:
     """Register iteration start."""
@@ -226,7 +229,10 @@ def handle_results(tensors: torch.Tensor) -> None:
     logger.info("outputs is %s", tensors)
     results_counter.add(n_items)
     monitoring_output_perf.append(monitoring._monitor_ctx.get_window_perf(key = MONITORING_KEY_OUTPUT))
-    monitoring_output_acc.append(monitoring._monitor_ctx.get_window_accuracy(key = MONITORING_KEY_OUTPUT))
+    count = monitoring._monitor_ctx.get_tag(key = MONITORING_KEY_OUTPUT)
+    window_size = monitoring._monitor_ctx.get_window_size(key = MONITORING_KEY_OUTPUT)
+    acc_percentage = monitoring._monitor_ctx.get_window_accuracy(key = MONITORING_KEY_OUTPUT) / min(count, window_size)
+    monitoring_output_acc.append(acc_percentage)
 
 
 def parse_yaml_sched(sched: List[dict], hosts: Optional[List[str]]) -> \
