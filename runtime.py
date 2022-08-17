@@ -15,6 +15,17 @@ import torch
 from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset
 from torchvision.datasets import ImageNet
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
+from PyQt5.QtCore import QRunnable, pyqtSlot, pyqtSignal, QObject, QThreadPool
+from PyQt5.QtWidgets import (
+    QApplication,
+    QLabel,
+    QHBoxLayout,
+    QGridLayout,
+    QMainWindow,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,)
+import pyqtgraph as pg
 from pipeedge.comm.p2p import DistP2pContext
 from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
 from pipeedge import models
@@ -24,6 +35,7 @@ from pipeedge.sched.scheduler import sched_pipeline
 import devices
 import model_cfg
 import monitoring
+
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +54,15 @@ MONITORING_KEY_QUANT_ENCODE = 'quant_encode'
 MONITORING_KEY_RECV = 'recv'
 MONITORING_KEY_SEND = 'send'
 
+PLOT_DATAPOINT_NUMBER = 100
+PLOT_TIME_INTERVAL = 0.5
+
+monitoring_model_perf = [0.,]
+monitoring_output_perf = [0.,]
+monitoring_output_acc = [0.,]
+monitoring_send_perf = [0.,]
+fig_titles = ["model_perf", "output_perf", "output_acc", "send_perf"]
+
 def forward_pre_hook_monitor(_module, _inputs) -> None:
     """Register iteration start."""
     monitoring.iteration_start(MONITORING_KEY_MODEL)
@@ -53,6 +74,7 @@ def forward_hook_monitor(module, _inputs, outputs) -> None:
     # Measure accuracy as the number of layers processed
     n_layers = module.end_layer - module.start_layer + 1
     monitoring.iteration(MONITORING_KEY_MODEL, work=n_items, accuracy=n_layers)
+    monitoring_model_perf.append(monitoring._monitor_ctx.get_window_perf(key = MONITORING_KEY_MODEL))
 
 def forward_pre_hook_quant_decode_start(_module, _inputs) -> None:
     """Register quantization decode start."""
@@ -128,6 +150,9 @@ def p2p_post_hook_monitor(tensors: Tuple[torch.Tensor, ...], key: str) -> None:
     mbits = sum(t.numel() * t.numpy().dtype.itemsize for t in tensors) * 8 / 1000000
     # Accuracy has no meaning here.
     monitoring.iteration(key, work=mbits)
+    if key == MONITORING_KEY_SEND:
+        monitoring_send_perf.append(monitoring._monitor_ctx.get_window_perf(key = MONITORING_KEY_SEND))
+
 
 
 class ThreadSafeCounter:
@@ -195,6 +220,8 @@ def handle_results(tensors: torch.Tensor) -> None:
     monitoring.iteration(MONITORING_KEY_OUTPUT, work=n_items, accuracy=acc, safe=False)
     logger.info("outputs is %s", tensors)
     results_counter.add(n_items)
+    monitoring_output_perf.append(monitoring._monitor_ctx.get_window_perf(key = MONITORING_KEY_OUTPUT))
+    monitoring_output_acc.append(monitoring._monitor_ctx.get_window_accuracy(key = MONITORING_KEY_OUTPUT))
 
 
 def parse_yaml_sched(sched: List[dict], hosts: Optional[List[str]]) -> \
@@ -565,6 +592,186 @@ def init_env(device: Optional[str], net_addr: str, net_port: int, net_ifname: st
     os.environ["GLOO_SOCKET_IFNAME"] = net_ifname # SOCKET_IFNAME
 
 
+class WorkerSignals(QObject):
+    '''
+    Defines the signals available from a running worker thread.
+
+    Supported signals are:
+
+    finished
+        No data
+
+    error
+        tuple (exctype, value, traceback.format_exc() )
+
+    result
+        object data returned from processing, anything
+
+    '''
+    finished = pyqtSignal()  # QtCore.pyqtSignal
+    # error = pyqtSignal(tuple)
+    result = pyqtSignal(object)
+
+class Worker(QRunnable):
+    '''
+    Worker thread
+
+    Inherits from QRunnable to handler worker thread setup, signals and wrap-up.
+
+    :param callback: The function callback to run on this worker thread. Supplied args and
+                     kwargs will be passed through to the runner.
+    :type callback: function
+    :param args: Arguments to pass to the callback function
+    :param kwargs: Keywords to pass to the callback function
+
+    '''
+
+    def __init__(self, fn, *args, **kwargs):
+        super(Worker, self).__init__()
+
+        # Store constructor arguments (re-used for processing)
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+        self.signals = WorkerSignals()
+
+        # Add the callback to our kwargs
+        self.kwargs['result_callback'] = self.signals.result
+
+    @pyqtSlot()
+    def run(self):
+        '''
+        Initialise the runner function with passed args, kwargs.
+        '''
+
+        # Retrieve args/kwargs here; and fire processing using them
+        result = self.fn(*self.args, **self.kwargs)
+        self.signals.result.emit(result)  # Return the result of the processing
+        self.signals.finished.emit()
+
+class MainWindow(QMainWindow):
+    """GUI main window"""
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle("PipeEdge Performance Monitor")
+
+        self.ROW_NUM_FIGS = 2
+        self.COL_NUM_FIGS = 2
+        self.labels = []
+        self.graphWidgets = []
+        self.plots = []
+        for i in range(self.ROW_NUM_FIGS):
+            for j in range(self.COL_NUM_FIGS):
+                tmp_label = QLabel()
+                tmp_label.setText(fig_titles[i*self.ROW_NUM_FIGS+j])
+                self.labels.append(tmp_label)
+                self.graphWidgets.append(pg.PlotWidget())
+
+        pagelayout = QVBoxLayout()
+        button_layout = QHBoxLayout()
+        figs_layout = QGridLayout()
+
+        # init the plot window
+        self.maxmin_ys = [[1,-1] for _ in range(self.ROW_NUM_FIGS * self.COL_NUM_FIGS)]
+        self.results = [[0,] for _ in range(self.ROW_NUM_FIGS * self.COL_NUM_FIGS)]
+        self.init_plot()
+        for i in range(self.ROW_NUM_FIGS):
+            for j in range(self.COL_NUM_FIGS):
+                fig_layout = QVBoxLayout()
+                fig_layout.addWidget(self.labels[i*self.ROW_NUM_FIGS+j])
+                fig_layout.addWidget(self.graphWidgets[i*self.ROW_NUM_FIGS+j])
+                figs_layout.addLayout(fig_layout, j, i)
+        pagelayout.addLayout(figs_layout)
+        pagelayout.addLayout(button_layout)
+
+        self.btn = QPushButton("start")
+        self.btn.pressed.connect(self.start_task)
+        button_layout.addWidget(self.btn)
+
+        self.stp_btn = QPushButton("stop")
+        self.stp_btn.pressed.connect(self.stop_task)
+        button_layout.addWidget(self.stp_btn)
+
+        widget = QWidget()
+        widget.setLayout(pagelayout)
+        self.setCentralWidget(widget)
+
+        self.worker = Worker(self.execute_this_fn)
+        self.worker.signals.result.connect(self.update_plot)
+        self.worker.signals.finished.connect(lambda: self.btn.setEnabled(True))
+        self.threadpool = QThreadPool()
+
+        self.threadactive = False
+        self.end_thread = False
+        self.thread_ended = False
+
+    def init_plot(self, x=0, y=0):
+        # plot data: x, y values
+        for i in range(self.ROW_NUM_FIGS):
+            for j in range(self.COL_NUM_FIGS):
+                self.graphWidgets[i*self.ROW_NUM_FIGS+j].setBackground('w')
+                self.graphWidgets[i*self.ROW_NUM_FIGS+j].setXRange(0, PLOT_DATAPOINT_NUMBER, padding=0)
+                pen = pg.mkPen(color=(255, 0, 0), width=3)
+                self.plots.append(self.graphWidgets[i*self.ROW_NUM_FIGS+j].plot([x], [y], pen=pen))
+
+    def update_plot(self):
+        for i in range(self.ROW_NUM_FIGS):
+            for j in range(self.COL_NUM_FIGS):
+                x = list(range(len(self.results[i*self.ROW_NUM_FIGS+j]))) if len(self.results[i*self.ROW_NUM_FIGS+j])!=0 else [0,]
+                y = self.results[i*self.ROW_NUM_FIGS+j] if len(self.results[i*self.ROW_NUM_FIGS+j])!=0 else [0,]
+                self.maxmin_ys[i*self.ROW_NUM_FIGS+j][0] = max(self.results[i*self.ROW_NUM_FIGS+j])\
+                                if (max(self.results[i*self.ROW_NUM_FIGS+j]) > self.maxmin_ys[i*self.ROW_NUM_FIGS+j][0])\
+                                else self.maxmin_ys[i*self.ROW_NUM_FIGS+j][0]
+                self.maxmin_ys[i*self.ROW_NUM_FIGS+j][1] = min(self.results[i*self.ROW_NUM_FIGS+j])\
+                                if (min(self.results[i*self.ROW_NUM_FIGS+j]) < self.maxmin_ys[i*self.ROW_NUM_FIGS+j][1])\
+                                else self.maxmin_ys[i*self.ROW_NUM_FIGS+j][1]
+                self.graphWidgets[i*self.ROW_NUM_FIGS+j].setYRange(self.maxmin_ys[i*self.ROW_NUM_FIGS+j][0], self.maxmin_ys[i*self.ROW_NUM_FIGS+j][1], padding=0)
+                self.plots[i*self.ROW_NUM_FIGS+j].setData(x, y)
+
+    def start_task(self):
+        self.btn.setEnabled(False)
+        self.stp_btn.setEnabled(True)
+        self.threadactive = True
+        if self.threadpool.activeThreadCount() == 0:
+            self.threadpool.start(self.worker)
+
+    def execute_this_fn(self, result_callback):
+        for _ in range(PLOT_DATAPOINT_NUMBER*10):
+            if self.end_thread:
+                break
+            if self.threadactive:
+                time.sleep(PLOT_TIME_INTERVAL)
+                perf_data = fetch_data_from_runtime()
+                if perf_data is not None:
+                    for i in range(self.ROW_NUM_FIGS):
+                        for j in range(self.COL_NUM_FIGS):
+                            self.results[i*self.ROW_NUM_FIGS+j] = perf_data[i*self.ROW_NUM_FIGS+j]
+                if len(self.results[0]) > PLOT_DATAPOINT_NUMBER:
+                    self.results.map(lambda x: x[-PLOT_DATAPOINT_NUMBER:])
+                result_callback.emit(self.results)
+            else:
+                time.sleep(PLOT_TIME_INTERVAL)
+                continue
+        self.thread_ended = True
+
+    def stop_task(self):
+        self.threadactive = False
+        self.btn.setEnabled(True)
+        self.stp_btn.setEnabled(False)
+
+
+def fetch_data_from_runtime():
+    if monitoring._monitor_ctx is None:
+        return None
+    return (
+        monitoring_model_perf,
+        monitoring_output_perf,
+        monitoring_output_acc,
+        monitoring_send_perf
+    )
+
+
 def main() -> None:
     """Main function."""
     #########################################################
@@ -665,19 +872,35 @@ def main() -> None:
 
     tik = time.time()
     init_env(args.device, args.addr, args.port, args.socket_ifname)
-    if args.comm == 'p2p':
-        run_pipeline_p2p(args.worldsize, args.rank, args.model_name, args.model_file,
-                         args.batch_size, args.ubatch_size, partition, quant, rank_order,
-                         args.data_rank, hosts, args.sched_models_file, args.sched_dev_types_file,
-                         args.sched_dev_file, args.dataset_name, args.dataset_root,
-                         args.dataset_split, args.dataset_shuffle, args.dataloader_num_workers)
-    else:
-        run_pipeline_rpc(args.worldsize, args.rank, args.model_name, args.model_file,
-                         args.batch_size, args.ubatch_size, partition, quant, rank_order,
-                         args.data_rank, hosts, args.sched_models_file, args.sched_dev_types_file,
-                         args.sched_dev_file, args.worker_threads)
+
+    def _run():
+        if args.comm == 'p2p':
+            run_pipeline_p2p(args.worldsize, args.rank, args.model_name, args.model_file,
+                            args.batch_size, args.ubatch_size, partition, quant, rank_order,
+                            args.data_rank, hosts, args.sched_models_file, args.sched_dev_types_file,
+                            args.sched_dev_file, args.dataset_name, args.dataset_root,
+                            args.dataset_split, args.dataset_shuffle, args.dataloader_num_workers)
+        else:
+            run_pipeline_rpc(args.worldsize, args.rank, args.model_name, args.model_file,
+                            args.batch_size, args.ubatch_size, partition, quant, rank_order,
+                            args.data_rank, hosts, args.sched_models_file, args.sched_dev_types_file,
+                            args.sched_dev_file, args.worker_threads)
+
+    t = threading.Thread(target=_run)
+    t.start()
+
+    # construct monitor panel
+    if args.rank == 0:
+        app = QApplication([""])
+        window = MainWindow()
+        window.show()
+        app.exec()
+
+    t.join()
+
     tok = time.time()
     logger.info("Total program execution time = %f", tok - tik)
+
 
 
 if __name__=="__main__":
