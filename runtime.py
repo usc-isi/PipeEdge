@@ -804,9 +804,10 @@ class MainWindow(QMainWindow):
                 for i in range(self.ROW_NUM_FIGS):
                     for j in range(self.COL_NUM_FIGS):
                         if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
-                            self.results[i*self.COL_NUM_FIGS+j] = perf_data[i*self.COL_NUM_FIGS+j]
-            if len(self.results[0]) > PLOT_DATAPOINT_NUMBER:
-                self.results.map(lambda x: x[-PLOT_DATAPOINT_NUMBER:])
+                            if len(perf_data[i*self.COL_NUM_FIGS+j]) <= PLOT_DATAPOINT_NUMBER:
+                                self.results[i*self.COL_NUM_FIGS+j] = perf_data[i*self.COL_NUM_FIGS+j]
+                            else:
+                                self.results[i*self.COL_NUM_FIGS+j] = perf_data[i*self.COL_NUM_FIGS+j][-PLOT_DATAPOINT_NUMBER:]
             result_callback.emit(self.results)
 
     def start_task(self):
@@ -924,8 +925,6 @@ def main() -> None:
     rank_order = None if args.rank_order is None else [int(i) for i in args.rank_order.split(',')]
     hosts = None if args.hosts is None else args.hosts.split(',')
 
-    # use command line specified bit value as start point of monitoring quant bitwidth list
-    monitoring_quant_bit = [quant[0],]
 
     tik = time.time()
     init_env(args.device, args.addr, args.port, args.socket_ifname)
