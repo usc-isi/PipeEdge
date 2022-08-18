@@ -7,7 +7,8 @@ _CLAMP_FACTOR_LAPLACE = {
     4: 5.03,
     5: 6.20,
     6: 7.41,
-    8: 9.90
+    8: 9.90,
+    16: 20.27
 }
 
 _CLAMP_FACTOR_GELU = {
@@ -16,7 +17,8 @@ _CLAMP_FACTOR_GELU = {
     4: 6.205,
     5: 7.41,
     6: 8.646,
-    8: 11.163
+    8: 11.163,
+    16: 21.59
 }
 
 def clamp_banner2019_gelu(tensor: torch.Tensor, bit: int) -> torch.Tensor:

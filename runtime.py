@@ -56,6 +56,8 @@ MONITORING_KEY_SEND = 'send'
 
 PLOT_DATAPOINT_NUMBER = 100
 PLOT_TIME_INTERVAL = 0.5
+TARGET_SEND_RATE_RATIO = 0.8
+TARGET_SEND_RATE = 20.0
 
 monitoring_model_perf = [0.,]
 monitoring_output_perf = [0.,]
@@ -65,6 +67,29 @@ fig_titles = [ "Model Shard Performance (items/sec)",
                "Pipeline Performance (classifications/sec)",
                "Pipeline Accuracy (% correct classifications)",
                "Send Bandwidth (Mbps)" ]
+
+def forward_hook_bandwidth_detect(module, _inputs, outputs) -> None:
+    with monitoring._monitor_ctx_lock:
+        tag = monitoring._monitor_ctx.get_tag(key=MONITORING_KEY_SEND)
+        window_size = monitoring._monitor_ctx.get_window_size(key=MONITORING_KEY_SEND)
+        # Only adapt at window period intervals
+        if tag > 0 and tag % window_size == 0:
+            send_rate = monitoring._monitor_ctx.get_window_heartrate(key = MONITORING_KEY_SEND)
+            if send_rate != 0:
+                if send_rate < TARGET_SEND_RATE_RATIO * TARGET_SEND_RATE:
+                    compress_ratio = int(TARGET_SEND_RATE/send_rate)+1
+                    if compress_ratio <= 1:
+                        module.quant_bit = torch.tensor(0)
+                    elif compress_ratio <= 2:
+                        module.quant_bit = torch.tensor(16)
+                    elif compress_ratio <=4:
+                        module.quant_bit = torch.tensor(8)
+                    elif compress_ratio ==5:
+                        module.quant_bit = torch.tensor(6)
+                    elif compress_ratio <=8:
+                        module.quant_bit = torch.tensor(4)
+                    else:
+                        module.quant_bit = torch.tensor(2)
 
 def forward_pre_hook_monitor(_module, _inputs) -> None:
     """Register iteration start."""
@@ -460,6 +485,7 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
             model.register_forward_hook(devices.forward_hook_to_cpu)
             model.register_forward_hook(forward_hook_monitor)
             if stage != len(stage_ranks) - 1:
+                model.register_forward_hook(forward_hook_bandwidth_detect)
                 model.register_forward_hook(forward_hook_quant_encode_start)
                 model.register_forward_hook(forward_hook_quant_encode)
                 model.register_forward_hook(forward_hook_quant_encode_finish)
