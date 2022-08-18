@@ -7,6 +7,7 @@ import random
 import sys
 import threading
 import time
+from math import sqrt, floor, ceil
 from typing import List, Optional, Sequence, Tuple, Union
 import numpy as np
 from PIL import Image
@@ -63,10 +64,21 @@ monitoring_model_perf = [0.,]
 monitoring_output_perf = [0.,]
 monitoring_output_acc = [0.,]
 monitoring_send_perf = [0.,]
-fig_titles = [ "Model Shard Performance (items/sec)",
-               "Pipeline Performance (classifications/sec)",
-               "Pipeline Accuracy (% correct classifications)",
-               "Send Bandwidth (Mbps)" ]
+monitoring_quant_bit = [0,]
+fig_titles = [ r"Model Shard Performance (items/sec)",
+               r"Pipeline Performance (classifications/sec)",
+               r"Pipeline Accuracy (% correct classifications)",
+               r"Send Bandwidth (Mbps)",
+               r"Quant bitwidth"]
+
+def fetch_data_from_runtime():
+    return (
+        monitoring_model_perf,
+        monitoring_output_perf,
+        monitoring_output_acc,
+        monitoring_send_perf,
+        monitoring_quant_bit
+    )
 
 def forward_hook_bandwidth_detect(module, _inputs, outputs) -> None:
     with monitoring._monitor_ctx_lock:
@@ -75,21 +87,21 @@ def forward_hook_bandwidth_detect(module, _inputs, outputs) -> None:
         # Only adapt at window period intervals
         if tag > 0 and tag % window_size == 0:
             send_rate = monitoring._monitor_ctx.get_window_heartrate(key = MONITORING_KEY_SEND)
-            if send_rate != 0:
-                if send_rate < TARGET_SEND_RATE_RATIO * TARGET_SEND_RATE:
-                    compress_ratio = int(TARGET_SEND_RATE/send_rate)+1
-                    if compress_ratio <= 1:
-                        module.quant_bit = torch.tensor(0)
-                    elif compress_ratio <= 2:
-                        module.quant_bit = torch.tensor(16)
-                    elif compress_ratio <=4:
-                        module.quant_bit = torch.tensor(8)
-                    elif compress_ratio ==5:
-                        module.quant_bit = torch.tensor(6)
-                    elif compress_ratio <=8:
-                        module.quant_bit = torch.tensor(4)
-                    else:
-                        module.quant_bit = torch.tensor(2)
+            if send_rate < TARGET_SEND_RATE_RATIO * TARGET_SEND_RATE:
+                compress_ratio = int(TARGET_SEND_RATE/send_rate)+1
+                if compress_ratio <= 1:
+                    module.quant_bit = torch.tensor(0)
+                elif compress_ratio <= 2:
+                    module.quant_bit = torch.tensor(16)
+                elif compress_ratio <=4:
+                    module.quant_bit = torch.tensor(8)
+                elif compress_ratio ==5:
+                    module.quant_bit = torch.tensor(6)
+                elif compress_ratio <=8:
+                    module.quant_bit = torch.tensor(4)
+                else:
+                    module.quant_bit = torch.tensor(2)
+        monitoring_quant_bit.append(module.quant_bit.item() if module.quant_bit.item()!=0 else 32)
 
 def forward_pre_hook_monitor(_module, _inputs) -> None:
     """Register iteration start."""
@@ -693,18 +705,24 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("PipeEdge Performance Monitor")
-
-        self.ROW_NUM_FIGS = 2
-        self.COL_NUM_FIGS = 2
+        self.TOT_NUM_FIGS = len(fig_titles)
+        self.ROW_NUM_FIGS = floor(sqrt(self.TOT_NUM_FIGS))
+        self.COL_NUM_FIGS = ceil(self.TOT_NUM_FIGS/self.ROW_NUM_FIGS)
+        if self.COL_NUM_FIGS * self.ROW_NUM_FIGS == self.TOT_NUM_FIGS:
+            self.fig_titles = fig_titles
+        else:
+            self.fig_titles = fig_titles + \
+                ["" for _ in range(self.COL_NUM_FIGS * self.ROW_NUM_FIGS - self.TOT_NUM_FIGS)]
         self.labels = []
         self.graphWidgets = []
         self.plots = []
         for i in range(self.ROW_NUM_FIGS):
             for j in range(self.COL_NUM_FIGS):
                 tmp_label = QLabel()
-                tmp_label.setText(fig_titles[i*self.ROW_NUM_FIGS+j])
+                tmp_label.setText(self.fig_titles[i*self.COL_NUM_FIGS+j])
+                tmp_widget = pg.PlotWidget() if self.fig_titles[i*self.COL_NUM_FIGS+j] != "" else QWidget()
                 self.labels.append(tmp_label)
-                self.graphWidgets.append(pg.PlotWidget())
+                self.graphWidgets.append(tmp_widget)
 
         pagelayout = QVBoxLayout()
         button_layout = QHBoxLayout()
@@ -717,9 +735,9 @@ class MainWindow(QMainWindow):
         for i in range(self.ROW_NUM_FIGS):
             for j in range(self.COL_NUM_FIGS):
                 fig_layout = QVBoxLayout()
-                fig_layout.addWidget(self.labels[i*self.ROW_NUM_FIGS+j])
-                fig_layout.addWidget(self.graphWidgets[i*self.ROW_NUM_FIGS+j])
-                figs_layout.addLayout(fig_layout, j, i)
+                fig_layout.addWidget(self.labels[i*self.COL_NUM_FIGS+j])
+                fig_layout.addWidget(self.graphWidgets[i*self.COL_NUM_FIGS+j])
+                figs_layout.addLayout(fig_layout, i, j)
         pagelayout.addLayout(figs_layout)
         pagelayout.addLayout(button_layout)
 
@@ -755,24 +773,26 @@ class MainWindow(QMainWindow):
         # plot data: x, y values
         for i in range(self.ROW_NUM_FIGS):
             for j in range(self.COL_NUM_FIGS):
-                self.graphWidgets[i*self.ROW_NUM_FIGS+j].setBackground('w')
-                self.graphWidgets[i*self.ROW_NUM_FIGS+j].setXRange(0, PLOT_DATAPOINT_NUMBER, padding=0)
-                pen = pg.mkPen(color=(255, 0, 0), width=3)
-                self.plots.append(self.graphWidgets[i*self.ROW_NUM_FIGS+j].plot([x], [y], pen=pen))
+                if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setBackground('w')
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setXRange(0, PLOT_DATAPOINT_NUMBER, padding=0)
+                    pen = pg.mkPen(color=(255, 0, 0), width=2)
+                    self.plots.append(self.graphWidgets[i*self.COL_NUM_FIGS+j].plot([x], [y], pen=pen))
 
     def update_plot(self):
         for i in range(self.ROW_NUM_FIGS):
             for j in range(self.COL_NUM_FIGS):
-                x = list(range(len(self.results[i*self.ROW_NUM_FIGS+j]))) if len(self.results[i*self.ROW_NUM_FIGS+j])!=0 else [0,]
-                y = self.results[i*self.ROW_NUM_FIGS+j] if len(self.results[i*self.ROW_NUM_FIGS+j])!=0 else [0,]
-                self.maxmin_ys[i*self.ROW_NUM_FIGS+j][0] = max(self.results[i*self.ROW_NUM_FIGS+j])\
-                                if (max(self.results[i*self.ROW_NUM_FIGS+j]) > self.maxmin_ys[i*self.ROW_NUM_FIGS+j][0])\
-                                else self.maxmin_ys[i*self.ROW_NUM_FIGS+j][0]
-                self.maxmin_ys[i*self.ROW_NUM_FIGS+j][1] = min(self.results[i*self.ROW_NUM_FIGS+j])\
-                                if (min(self.results[i*self.ROW_NUM_FIGS+j]) < self.maxmin_ys[i*self.ROW_NUM_FIGS+j][1])\
-                                else self.maxmin_ys[i*self.ROW_NUM_FIGS+j][1]
-                self.graphWidgets[i*self.ROW_NUM_FIGS+j].setYRange(self.maxmin_ys[i*self.ROW_NUM_FIGS+j][0], self.maxmin_ys[i*self.ROW_NUM_FIGS+j][1], padding=0)
-                self.plots[i*self.ROW_NUM_FIGS+j].setData(x, y)
+                if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
+                    x = list(range(len(self.results[i*self.COL_NUM_FIGS+j]))) if len(self.results[i*self.COL_NUM_FIGS+j])!=0 else [0,]
+                    y = self.results[i*self.COL_NUM_FIGS+j] if len(self.results[i*self.COL_NUM_FIGS+j])!=0 else [0,]
+                    self.maxmin_ys[i*self.COL_NUM_FIGS+j][0] = max(self.results[i*self.COL_NUM_FIGS+j])\
+                                    if (max(self.results[i*self.COL_NUM_FIGS+j]) > self.maxmin_ys[i*self.COL_NUM_FIGS+j][0])\
+                                    else self.maxmin_ys[i*self.COL_NUM_FIGS+j][0]
+                    self.maxmin_ys[i*self.COL_NUM_FIGS+j][1] = min(self.results[i*self.COL_NUM_FIGS+j])\
+                                    if (min(self.results[i*self.COL_NUM_FIGS+j]) < self.maxmin_ys[i*self.COL_NUM_FIGS+j][1])\
+                                    else self.maxmin_ys[i*self.COL_NUM_FIGS+j][1]
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setYRange(self.maxmin_ys[i*self.COL_NUM_FIGS+j][0], self.maxmin_ys[i*self.COL_NUM_FIGS+j][1], padding=0)
+                    self.plots[i*self.COL_NUM_FIGS+j].setData(x, y)
 
     def poll_fig_data(self, result_callback):
         while True:
@@ -783,7 +803,8 @@ class MainWindow(QMainWindow):
             if perf_data is not None:
                 for i in range(self.ROW_NUM_FIGS):
                     for j in range(self.COL_NUM_FIGS):
-                        self.results[i*self.ROW_NUM_FIGS+j] = perf_data[i*self.ROW_NUM_FIGS+j]
+                        if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
+                            self.results[i*self.COL_NUM_FIGS+j] = perf_data[i*self.COL_NUM_FIGS+j]
             if len(self.results[0]) > PLOT_DATAPOINT_NUMBER:
                 self.results.map(lambda x: x[-PLOT_DATAPOINT_NUMBER:])
             result_callback.emit(self.results)
@@ -802,15 +823,6 @@ class MainWindow(QMainWindow):
 
     def stop_task(self):
         _unblock_pipeline()
-
-
-def fetch_data_from_runtime():
-    return (
-        monitoring_model_perf,
-        monitoring_output_perf,
-        monitoring_output_acc,
-        monitoring_send_perf
-    )
 
 
 def main() -> None:
@@ -911,6 +923,9 @@ def main() -> None:
     quant = None if args.quant is None else [int(i) for i in args.quant.split(',')]
     rank_order = None if args.rank_order is None else [int(i) for i in args.rank_order.split(',')]
     hosts = None if args.hosts is None else args.hosts.split(',')
+
+    # use command line specified bit value as start point of monitoring quant bitwidth list
+    monitoring_quant_bit = [quant[0],]
 
     tik = time.time()
     init_env(args.device, args.addr, args.port, args.socket_ifname)
