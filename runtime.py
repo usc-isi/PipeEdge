@@ -60,11 +60,11 @@ PLOT_TIME_INTERVAL = 0.5
 TARGET_SEND_RATE_RATIO = 0.8
 TARGET_SEND_RATE = 20.0
 
-monitoring_model_perf = [0.,]
-monitoring_output_perf = [0.,]
-monitoring_output_acc = [0.,]
-monitoring_send_perf = [0.,]
-monitoring_quant_bit = [0,]
+monitoring_model_perf = []
+monitoring_output_perf = []
+monitoring_output_acc = []
+monitoring_send_perf = []
+monitoring_quant_bit = []
 fig_titles = [ r"Model Shard Performance (items/sec)",
                r"Pipeline Performance (classifications/sec)",
                r"Pipeline Accuracy (% correct classifications)",
@@ -729,7 +729,7 @@ class MainWindow(QMainWindow):
         figs_layout = QGridLayout()
 
         # init the plot window
-        self.maxmin_ys = [[1,-1] for _ in range(self.ROW_NUM_FIGS * self.COL_NUM_FIGS)]
+        self.maxmin_ys = [[1,0] for _ in range(self.ROW_NUM_FIGS * self.COL_NUM_FIGS)]
         self.results = [[0,] for _ in range(self.ROW_NUM_FIGS * self.COL_NUM_FIGS)]
         self.init_plot()
         for i in range(self.ROW_NUM_FIGS):
@@ -785,13 +785,10 @@ class MainWindow(QMainWindow):
                 if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
                     x = list(range(len(self.results[i*self.COL_NUM_FIGS+j]))) if len(self.results[i*self.COL_NUM_FIGS+j])!=0 else [0,]
                     y = self.results[i*self.COL_NUM_FIGS+j] if len(self.results[i*self.COL_NUM_FIGS+j])!=0 else [0,]
-                    self.maxmin_ys[i*self.COL_NUM_FIGS+j][0] = max(self.results[i*self.COL_NUM_FIGS+j])\
-                                    if (max(self.results[i*self.COL_NUM_FIGS+j]) > self.maxmin_ys[i*self.COL_NUM_FIGS+j][0])\
-                                    else self.maxmin_ys[i*self.COL_NUM_FIGS+j][0]
-                    self.maxmin_ys[i*self.COL_NUM_FIGS+j][1] = min(self.results[i*self.COL_NUM_FIGS+j])\
-                                    if (min(self.results[i*self.COL_NUM_FIGS+j]) < self.maxmin_ys[i*self.COL_NUM_FIGS+j][1])\
-                                    else self.maxmin_ys[i*self.COL_NUM_FIGS+j][1]
-                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setYRange(self.maxmin_ys[i*self.COL_NUM_FIGS+j][0], self.maxmin_ys[i*self.COL_NUM_FIGS+j][1], padding=0)
+                    self.maxmin_ys[i*self.COL_NUM_FIGS+j][0] = max(self.results[i*self.COL_NUM_FIGS+j], default=1)
+                    # just keep minimum value as 0
+                    # self.maxmin_ys[i*self.COL_NUM_FIGS+j][1] = min(self.results[i*self.COL_NUM_FIGS+j] + [0])
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setYRange(self.maxmin_ys[i*self.COL_NUM_FIGS+j][0], self.maxmin_ys[i*self.COL_NUM_FIGS+j][1])
                     self.plots[i*self.COL_NUM_FIGS+j].setData(x, y)
 
     def poll_fig_data(self, result_callback):
@@ -800,14 +797,13 @@ class MainWindow(QMainWindow):
             if self.end_thread.is_set():
                 break
             perf_data = fetch_data_from_runtime()
-            if perf_data is not None:
-                for i in range(self.ROW_NUM_FIGS):
-                    for j in range(self.COL_NUM_FIGS):
-                        if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
-                            if len(perf_data[i*self.COL_NUM_FIGS+j]) <= PLOT_DATAPOINT_NUMBER:
-                                self.results[i*self.COL_NUM_FIGS+j] = perf_data[i*self.COL_NUM_FIGS+j]
-                            else:
-                                self.results[i*self.COL_NUM_FIGS+j] = perf_data[i*self.COL_NUM_FIGS+j][-PLOT_DATAPOINT_NUMBER:]
+            for i in range(self.ROW_NUM_FIGS):
+                for j in range(self.COL_NUM_FIGS):
+                    if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
+                        if len(perf_data[i*self.COL_NUM_FIGS+j]) <= PLOT_DATAPOINT_NUMBER:
+                            self.results[i*self.COL_NUM_FIGS+j] = perf_data[i*self.COL_NUM_FIGS+j]
+                        else:
+                            self.results[i*self.COL_NUM_FIGS+j] = perf_data[i*self.COL_NUM_FIGS+j][-PLOT_DATAPOINT_NUMBER:]
             result_callback.emit(self.results)
 
     def start_task(self):
