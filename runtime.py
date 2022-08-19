@@ -729,7 +729,6 @@ class MainWindow(QMainWindow):
         figs_layout = QGridLayout()
 
         # init the plot window
-        self.maxmin_ys = [[1,0] for _ in range(self.ROW_NUM_FIGS * self.COL_NUM_FIGS)]
         self.results = [[0,] for _ in range(self.ROW_NUM_FIGS * self.COL_NUM_FIGS)]
         self.init_plot()
         for i in range(self.ROW_NUM_FIGS):
@@ -780,15 +779,20 @@ class MainWindow(QMainWindow):
                     self.plots.append(self.graphWidgets[i*self.COL_NUM_FIGS+j].plot([x], [y], pen=pen))
 
     def update_plot(self):
+        window_size = monitoring.get_window_size()
         for i in range(self.ROW_NUM_FIGS):
             for j in range(self.COL_NUM_FIGS):
                 if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
                     x = list(range(len(self.results[i*self.COL_NUM_FIGS+j]))) if len(self.results[i*self.COL_NUM_FIGS+j])!=0 else [0,]
                     y = self.results[i*self.COL_NUM_FIGS+j] if len(self.results[i*self.COL_NUM_FIGS+j])!=0 else [0,]
-                    self.maxmin_ys[i*self.COL_NUM_FIGS+j][0] = max(self.results[i*self.COL_NUM_FIGS+j], default=1)
-                    # just keep minimum value as 0
-                    # self.maxmin_ys[i*self.COL_NUM_FIGS+j][1] = min(self.results[i*self.COL_NUM_FIGS+j] + [0])
-                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setYRange(self.maxmin_ys[i*self.COL_NUM_FIGS+j][0], self.maxmin_ys[i*self.COL_NUM_FIGS+j][1])
+                    # slide in window size increments to reduce noise
+                    idx_max = max(len(self.results[i*self.COL_NUM_FIGS+j]) - 1, 0)
+                    x_max = int(ceil(idx_max / window_size)) * window_size
+                    x_max = max(PLOT_DATAPOINT_NUMBER, x_max)
+                    x_min = max(0, x_max - PLOT_DATAPOINT_NUMBER)
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setXRange(x_min, x_max)
+                    y_max = max(self.results[i*self.COL_NUM_FIGS+j][x_min:min(x_max, idx_max)], default=1)
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setYRange(0, y_max)
                     self.plots[i*self.COL_NUM_FIGS+j].setData(x, y)
 
     def poll_fig_data(self, result_callback):
@@ -800,10 +804,7 @@ class MainWindow(QMainWindow):
             for i in range(self.ROW_NUM_FIGS):
                 for j in range(self.COL_NUM_FIGS):
                     if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
-                        if len(perf_data[i*self.COL_NUM_FIGS+j]) <= PLOT_DATAPOINT_NUMBER:
-                            self.results[i*self.COL_NUM_FIGS+j] = perf_data[i*self.COL_NUM_FIGS+j]
-                        else:
-                            self.results[i*self.COL_NUM_FIGS+j] = perf_data[i*self.COL_NUM_FIGS+j][-PLOT_DATAPOINT_NUMBER:]
+                        self.results[i*self.COL_NUM_FIGS+j] = perf_data[i*self.COL_NUM_FIGS+j]
             result_callback.emit(self.results)
 
     def start_task(self):
