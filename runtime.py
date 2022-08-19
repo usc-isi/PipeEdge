@@ -275,7 +275,7 @@ def handle_results(tensors: torch.Tensor) -> None:
         count = monitoring._monitor_ctx.get_tag(key=MONITORING_KEY_OUTPUT)
         window_size = monitoring._monitor_ctx.get_window_size(key=MONITORING_KEY_OUTPUT)
     monitoring_output_perf.append(perf)
-    acc_percentage = acc / min(count, window_size)
+    acc_percentage = acc / min(count, window_size) / n_items * 100
     monitoring_output_acc.append(acc_percentage)
 
 
