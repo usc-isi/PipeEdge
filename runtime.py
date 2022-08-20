@@ -57,18 +57,20 @@ MONITORING_KEY_SEND = 'send'
 
 PLOT_DATAPOINT_NUMBER = 100
 PLOT_TIME_INTERVAL = 0.5
-TARGET_SEND_RATE_RATIO = 0.8
-TARGET_SEND_RATE = 20.0
+TARGET_SEND_RATE_RATIO = 0.9
+TARGET_SEND_RATE = 12.0
 
 monitoring_model_perf = []
 monitoring_output_perf = []
 monitoring_output_acc = []
 monitoring_send_perf = []
+monitoring_send_rate = []
 monitoring_quant_bit = []
 fig_titles = [ r"Model Shard Performance (items/sec)",
                r"Pipeline Performance (classifications/sec)",
                r"Pipeline Accuracy (% correct classifications)",
                r"Send Bandwidth (Mbps)",
+               r"Send Performance (images/sec)",
                r"Quant bitwidth"]
 
 def fetch_data_from_runtime():
@@ -77,6 +79,7 @@ def fetch_data_from_runtime():
         monitoring_output_perf,
         monitoring_output_acc,
         monitoring_send_perf,
+        monitoring_send_rate,
         monitoring_quant_bit
     )
 
@@ -84,14 +87,12 @@ def forward_hook_bandwidth_detect(module, _inputs, outputs) -> None:
     with monitoring._monitor_ctx_lock:
         tag = monitoring._monitor_ctx.get_tag(key=MONITORING_KEY_SEND)
         window_size = monitoring._monitor_ctx.get_window_size(key=MONITORING_KEY_SEND)
+        send_rate = monitoring._monitor_ctx.get_window_heartrate(key = MONITORING_KEY_SEND)
         # Only adapt at window period intervals
         if tag > 0 and tag % window_size == 0:
-            send_rate = monitoring._monitor_ctx.get_window_heartrate(key = MONITORING_KEY_SEND)
             if send_rate < TARGET_SEND_RATE_RATIO * TARGET_SEND_RATE:
                 compress_ratio = int(TARGET_SEND_RATE/send_rate)+1
-                if compress_ratio <= 1:
-                    module.quant_bit = torch.tensor(0)
-                elif compress_ratio <= 2:
+                if compress_ratio <= 2:
                     module.quant_bit = torch.tensor(16)
                 elif compress_ratio <=4:
                     module.quant_bit = torch.tensor(8)
@@ -101,6 +102,9 @@ def forward_hook_bandwidth_detect(module, _inputs, outputs) -> None:
                     module.quant_bit = torch.tensor(4)
                 else:
                     module.quant_bit = torch.tensor(2)
+            else:
+                module.quant_bit = torch.tensor(0)
+        monitoring_send_rate.append(send_rate)
         monitoring_quant_bit.append(module.quant_bit.item() if module.quant_bit.item()!=0 else 32)
 
 def forward_pre_hook_monitor(_module, _inputs) -> None:
