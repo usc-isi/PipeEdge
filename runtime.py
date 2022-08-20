@@ -914,7 +914,24 @@ def main() -> None:
                         help="devices YAML file for scheduler, e.g., devices.yml; "
                              "devices in file should satisfy set membership constraint: "
                              "devices <= HOSTS")
+    # Tuning the plot and demo configuration
+    plt_cfg = parser.add_argument_group('Plot tuning')
+    plt_cfg.add_argument("-ppn", "--plot-point-num", default=100, type=int,
+                        help="the range of polt xaxi; recommand [100|1000] on device [cpu|cuda]")
+    plt_cfg.add_argument("-tsr", "--target-send-rate", default=12.0, type=float,
+                        help="the target send rate used for adaptive quantization")
+    plt_cfg.add_argument("-trr", "--target-send-rate-ratio", default=0.9, type=float,
+                        help="the target send rate used for adaptive quantization")
     args = parser.parse_args()
+
+    # Change the global value
+    global PLOT_DATAPOINT_NUMBER
+    global TARGET_SEND_RATE
+    global TARGET_SEND_RATE_RATIO
+    PLOT_DATAPOINT_NUMBER = args.plot_point_num
+    TARGET_SEND_RATE = args.target_send_rate
+    TARGET_SEND_RATE_RATIO = args.target_send_rate_ratio
+
 
     if args.partition is None:
         partition = None
