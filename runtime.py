@@ -91,24 +91,24 @@ def forward_hook_bandwidth_detect(module, _inputs, outputs) -> None:
         tag = monitoring._monitor_ctx.get_tag(key=MONITORING_KEY_SEND)
         window_size = monitoring._monitor_ctx.get_window_size(key=MONITORING_KEY_SEND)
         send_rate = monitoring._monitor_ctx.get_window_heartrate(key = MONITORING_KEY_SEND)
-        # Only adapt at window period intervals
-        if tag > 0 and tag % window_size == 0:
-            if send_rate < TARGET_SEND_RATE:
-                compress_ratio = int(TARGET_SEND_RATE/send_rate)+1
-                if compress_ratio <= 2:
-                    module.quant_bit = torch.tensor(16)
-                elif compress_ratio <=4:
-                    module.quant_bit = torch.tensor(8)
-                elif compress_ratio ==5:
-                    module.quant_bit = torch.tensor(6)
-                elif compress_ratio <=8:
-                    module.quant_bit = torch.tensor(4)
-                else:
-                    module.quant_bit = torch.tensor(2)
+    # Only adapt at window period intervals
+    if tag > 0 and tag % window_size == 0:
+        if send_rate < TARGET_SEND_RATE:
+            compress_ratio = int(TARGET_SEND_RATE/send_rate)+1
+            if compress_ratio <= 2:
+                module.quant_bit = torch.tensor(16)
+            elif compress_ratio <=4:
+                module.quant_bit = torch.tensor(8)
+            elif compress_ratio ==5:
+                module.quant_bit = torch.tensor(6)
+            elif compress_ratio <=8:
+                module.quant_bit = torch.tensor(4)
             else:
-                module.quant_bit = torch.tensor(0)
-        monitoring_send_rate.append(send_rate * module.microbatch_size.item())
-        monitoring_quant_bit.append(module.quant_bit.item() if module.quant_bit.item()!=0 else 32)
+                module.quant_bit = torch.tensor(2)
+        else:
+            module.quant_bit = torch.tensor(0)
+    monitoring_send_rate.append(send_rate * module.microbatch_size.item())
+    monitoring_quant_bit.append(module.quant_bit.item() if module.quant_bit.item()!=0 else 32)
 
 def forward_pre_hook_monitor(_module, _inputs) -> None:
     """Register iteration start."""
