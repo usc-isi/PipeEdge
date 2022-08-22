@@ -8,7 +8,6 @@ import sys
 import threading
 import time
 from math import sqrt, floor, ceil
-from tkinter.tix import Tree
 from typing import List, Optional, Sequence, Tuple, Union
 import numpy as np
 from PIL import Image
@@ -500,9 +499,9 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
             model = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage][0],
                                                    stage_layers[stage][1], stage)
             q_bit = torch.tensor(stage_quant[stage])
-            ubatch_size = torch.tensor(ubatch_size)
+            ubatch_size_tensor = torch.tensor(ubatch_size)
             model.register_buffer('quant_bit', q_bit)
-            model.register_buffer('microbatch_size', ubatch_size)
+            model.register_buffer('microbatch_size', ubatch_size_tensor)
             model.register_forward_hook(devices.forward_hook_to_cpu)
             model.register_forward_hook(forward_hook_monitor)
             if stage != len(stage_ranks) - 1:
