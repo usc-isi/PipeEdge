@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset
 from torchvision.datasets import ImageNet
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 from PyQt5.QtCore import QRunnable, pyqtSlot, pyqtSignal, QObject, QThreadPool
+from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QApplication,
     QLabel,
@@ -70,11 +71,11 @@ fig_titles = [ r"Pipeline Performance",
                r"Send Bandwidth",
                r"Send Performance",
                r"Quant bitwidth"]
-fig_yaxi_label = [ r"performance (images/sec)",
-               r"top-1 correct %",
-               r"bandwidth (Mbps)",
-               r"performance (images/sec)",
-               r"bitwidth"]
+fig_yaxi_label = [ r"Images/sec",
+               r"Top-1 correct %",
+               r"Mbps",
+               r"Images/sec",
+               r"Bitwidth"]
 
 def fetch_data_from_runtime():
     return (
@@ -729,10 +730,12 @@ class MainWindow(QMainWindow):
         self.labels = []
         self.graphWidgets = []
         self.plots = []
+        pg.setConfigOptions(foreground=pg.mkColor(0.0))
         for i in range(self.ROW_NUM_FIGS):
             for j in range(self.COL_NUM_FIGS):
                 tmp_label = QLabel()
                 tmp_label.setText(self.fig_titles[i*self.COL_NUM_FIGS+j])
+                tmp_label.setFont(QFont('Times', 16))
                 tmp_widget = pg.PlotWidget() if self.fig_titles[i*self.COL_NUM_FIGS+j] != "" else QWidget()
                 self.labels.append(tmp_label)
                 self.graphWidgets.append(tmp_widget)
@@ -786,11 +789,15 @@ class MainWindow(QMainWindow):
         for i in range(self.ROW_NUM_FIGS):
             for j in range(self.COL_NUM_FIGS):
                 if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
+                    bottom_lbl_style = {'font-size': '18pt'}
+                    left_lbl_style = {'font-size': '18pt'}
                     self.graphWidgets[i*self.COL_NUM_FIGS+j].setBackground('w')
                     self.graphWidgets[i*self.COL_NUM_FIGS+j].setXRange(0, PLOT_DATAPOINT_NUMBER, padding=0)
-                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setLabel(axis='bottom', text='Iteration No.')
-                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setLabel(axis='left', text=self.fig_yaxi_label[i*self.COL_NUM_FIGS+j])
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setLabel(axis='bottom', text='Microbatch', **bottom_lbl_style)
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setLabel(axis='left', text=self.fig_yaxi_label[i*self.COL_NUM_FIGS+j], **left_lbl_style)
                     self.graphWidgets[i*self.COL_NUM_FIGS+j].showGrid(x=True, y=True, alpha=0.2)
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].getAxis("bottom").setTickFont(QFont('Times', 16))
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].getAxis("left").setTickFont(QFont('Times', 16))
                     pen = pg.mkPen(color=(255, 0, 0), width=2)
                     self.plots.append(self.graphWidgets[i*self.COL_NUM_FIGS+j].plot([x], [y], pen=pen))
 
