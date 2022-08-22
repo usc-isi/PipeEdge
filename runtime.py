@@ -58,7 +58,6 @@ MONITORING_KEY_SEND = 'send'
 
 PLOT_DATAPOINT_NUMBER = 100
 PLOT_TIME_INTERVAL = 0.5
-TARGET_SEND_RATE_RATIO = 0.9
 TARGET_SEND_RATE = 12.0
 
 monitoring_model_perf = []
@@ -67,22 +66,19 @@ monitoring_output_acc = []
 monitoring_send_perf = []
 monitoring_send_rate = []
 monitoring_quant_bit = []
-fig_titles = [ r"Model Shard Performance",
-               r"Pipeline Performance",
+fig_titles = [ r"Pipeline Performance",
                r"Pipeline Accuracy",
                r"Send Bandwidth",
                r"Send Performance",
                r"Quant bitwidth"]
-fig_yaxi_label = [ r"items/sec",
-               r"classifications/sec",
-               r"% correct classifications",
+fig_yaxi_label = [ r"performance (images/sec)",
+               r"top-1 correct %",
                r"bandwidth (Mbps)",
-               r"performance (microbathes/sec)",
+               r"performance (images/sec)",
                r"bitwidth"]
 
 def fetch_data_from_runtime():
     return (
-        monitoring_model_perf,
         monitoring_output_perf,
         monitoring_output_acc,
         monitoring_send_perf,
@@ -97,7 +93,7 @@ def forward_hook_bandwidth_detect(module, _inputs, outputs) -> None:
         send_rate = monitoring._monitor_ctx.get_window_heartrate(key = MONITORING_KEY_SEND)
         # Only adapt at window period intervals
         if tag > 0 and tag % window_size == 0:
-            if send_rate < TARGET_SEND_RATE_RATIO * TARGET_SEND_RATE:
+            if send_rate < TARGET_SEND_RATE:
                 compress_ratio = int(TARGET_SEND_RATE/send_rate)+1
                 if compress_ratio <= 2:
                     module.quant_bit = torch.tensor(16)
@@ -111,7 +107,7 @@ def forward_hook_bandwidth_detect(module, _inputs, outputs) -> None:
                     module.quant_bit = torch.tensor(2)
             else:
                 module.quant_bit = torch.tensor(0)
-        monitoring_send_rate.append(send_rate)
+        monitoring_send_rate.append(send_rate * module.microbatch_size.item())
         monitoring_quant_bit.append(module.quant_bit.item() if module.quant_bit.item()!=0 else 32)
 
 def forward_pre_hook_monitor(_module, _inputs) -> None:
@@ -504,7 +500,9 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
             model = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage][0],
                                                    stage_layers[stage][1], stage)
             q_bit = torch.tensor(stage_quant[stage])
+            ubatch_size = torch.tensor(ubatch_size)
             model.register_buffer('quant_bit', q_bit)
+            model.register_buffer('microbatch_size', ubatch_size)
             model.register_forward_hook(devices.forward_hook_to_cpu)
             model.register_forward_hook(forward_hook_monitor)
             if stage != len(stage_ranks) - 1:
@@ -606,7 +604,9 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
                                                            stage_layers, data_rank, handle_results)
             q_bit = [torch.tensor(stage_quant[s])
                       for s in range(len(stage_quant))]
+            ubatch_size = torch.tensor(ubatch_size)
             pipeline.rpc_register_buffer('quant_bit', q_bit)
+            pipeline.rpc_register_buffer('microbatch_size', ubatch_size)
             pipeline.rpc_register_forward_hook(devices.forward_hook_to_cpu)
             pipeline.rpc_register_forward_hook(forward_hook_monitor)
             pipeline.rpc_register_forward_hook(forward_hook_quant_encode_start, last=False)
@@ -717,8 +717,8 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("PipeEdge Performance Monitor")
         self.TOT_NUM_FIGS = len(fig_titles)
-        self.ROW_NUM_FIGS = floor(sqrt(self.TOT_NUM_FIGS))
-        self.COL_NUM_FIGS = ceil(self.TOT_NUM_FIGS/self.ROW_NUM_FIGS)
+        self.COL_NUM_FIGS = floor(sqrt(self.TOT_NUM_FIGS))
+        self.ROW_NUM_FIGS = ceil(self.TOT_NUM_FIGS/self.COL_NUM_FIGS)
         if self.COL_NUM_FIGS * self.ROW_NUM_FIGS == self.TOT_NUM_FIGS:
             self.fig_titles = fig_titles
             self.fig_yaxi_label = fig_yaxi_label
@@ -941,10 +941,9 @@ def main() -> None:
     # Change the global value
     global PLOT_DATAPOINT_NUMBER
     global TARGET_SEND_RATE
-    global TARGET_SEND_RATE_RATIO
     PLOT_DATAPOINT_NUMBER = args.plot_point_num
     TARGET_SEND_RATE = args.target_send_rate
-    TARGET_SEND_RATE_RATIO = args.target_send_rate_ratio
+
 
 
     if args.partition is None:
