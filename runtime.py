@@ -21,6 +21,7 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QApplication,
     QLabel,
+    QLineEdit,
     QHBoxLayout,
     QGridLayout,
     QMainWindow,
@@ -744,6 +745,7 @@ class MainWindow(QMainWindow):
         pagelayout = QVBoxLayout()
         button_layout = QHBoxLayout()
         figs_layout = QGridLayout()
+        config_layout = QHBoxLayout()
 
         # init the plot window
         self.results = [[0,] for _ in range(self.ROW_NUM_FIGS * self.COL_NUM_FIGS)]
@@ -756,6 +758,7 @@ class MainWindow(QMainWindow):
                 figs_layout.addLayout(fig_layout, i, j)
         pagelayout.addLayout(figs_layout)
         pagelayout.addLayout(button_layout)
+        pagelayout.addLayout(config_layout)
 
         self.strt_btn = QPushButton("Start")
         self.strt_btn.pressed.connect(self.start_task)
@@ -768,6 +771,14 @@ class MainWindow(QMainWindow):
         self.stp_btn = QPushButton("Stop")
         self.stp_btn.pressed.connect(self.stop_task)
         button_layout.addWidget(self.stp_btn)
+
+        config_layout.addWidget(QLabel("Set Rate Constraint (images/sec):"))
+        self.target_rate_txtbox = QLineEdit()
+        # self.target_rate_txtbox.editingFinished.connect(self.set_target_rate_task)
+        config_layout.addWidget(self.target_rate_txtbox)
+        target_rate_btn = QPushButton("Set")
+        target_rate_btn.pressed.connect(self.set_target_rate_task)
+        config_layout.addWidget(target_rate_btn)
 
         widget = QWidget()
         widget.setLayout(pagelayout)
@@ -846,6 +857,15 @@ class MainWindow(QMainWindow):
 
     def stop_task(self):
         _unblock_pipeline()
+
+    def set_target_rate_task(self):
+        global TARGET_SEND_RATE
+        text = self.target_rate_txtbox.text()
+        try:
+            TARGET_SEND_RATE = float(text)
+        except ValueError:
+            logger.error("Invalid float value: %s", text)
+            self.target_rate_txtbox.setText(f"Use a valid float value!")
 
 
 def main() -> None:
