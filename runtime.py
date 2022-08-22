@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from math import sqrt, floor, ceil
+from tkinter.tix import Tree
 from typing import List, Optional, Sequence, Tuple, Union
 import numpy as np
 from PIL import Image
@@ -66,12 +67,18 @@ monitoring_output_acc = []
 monitoring_send_perf = []
 monitoring_send_rate = []
 monitoring_quant_bit = []
-fig_titles = [ r"Model Shard Performance (items/sec)",
-               r"Pipeline Performance (classifications/sec)",
-               r"Pipeline Accuracy (% correct classifications)",
-               r"Send Bandwidth (Mbps)",
-               r"Send Performance (images/sec)",
+fig_titles = [ r"Model Shard Performance",
+               r"Pipeline Performance",
+               r"Pipeline Accuracy",
+               r"Send Bandwidth",
+               r"Send Performance",
                r"Quant bitwidth"]
+fig_yaxi_label = [ r"items/sec",
+               r"classifications/sec",
+               r"% correct classifications",
+               r"bandwidth (Mbps)",
+               r"performance (microbathes/sec)",
+               r"bitwidth"]
 
 def fetch_data_from_runtime():
     return (
@@ -714,8 +721,11 @@ class MainWindow(QMainWindow):
         self.COL_NUM_FIGS = ceil(self.TOT_NUM_FIGS/self.ROW_NUM_FIGS)
         if self.COL_NUM_FIGS * self.ROW_NUM_FIGS == self.TOT_NUM_FIGS:
             self.fig_titles = fig_titles
+            self.fig_yaxi_label = fig_yaxi_label
         else:
             self.fig_titles = fig_titles + \
+                ["" for _ in range(self.COL_NUM_FIGS * self.ROW_NUM_FIGS - self.TOT_NUM_FIGS)]
+            self.fig_yaxi_label = fig_yaxi_label + \
                 ["" for _ in range(self.COL_NUM_FIGS * self.ROW_NUM_FIGS - self.TOT_NUM_FIGS)]
         self.labels = []
         self.graphWidgets = []
@@ -779,6 +789,9 @@ class MainWindow(QMainWindow):
                 if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
                     self.graphWidgets[i*self.COL_NUM_FIGS+j].setBackground('w')
                     self.graphWidgets[i*self.COL_NUM_FIGS+j].setXRange(0, PLOT_DATAPOINT_NUMBER, padding=0)
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setLabel(axis='bottom', text='Iteration No.')
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].setLabel(axis='left', text=self.fig_yaxi_label[i*self.COL_NUM_FIGS+j])
+                    self.graphWidgets[i*self.COL_NUM_FIGS+j].showGrid(x=True, y=True, alpha=0.2)
                     pen = pg.mkPen(color=(255, 0, 0), width=2)
                     self.plots.append(self.graphWidgets[i*self.COL_NUM_FIGS+j].plot([x], [y], pen=pen))
 
@@ -787,8 +800,9 @@ class MainWindow(QMainWindow):
         for i in range(self.ROW_NUM_FIGS):
             for j in range(self.COL_NUM_FIGS):
                 if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
-                    x = list(range(len(self.results[i*self.COL_NUM_FIGS+j]))) if len(self.results[i*self.COL_NUM_FIGS+j])!=0 else [0,]
                     y = self.results[i*self.COL_NUM_FIGS+j] if len(self.results[i*self.COL_NUM_FIGS+j])!=0 else [0,]
+                    # x must be derived from y in case of race condition, resulting unequal size of x and y
+                    x = list(range(len(y)))
                     # slide in window size increments to reduce noise
                     idx_max = max(len(self.results[i*self.COL_NUM_FIGS+j]) - 1, 0)
                     x_max = int(ceil(idx_max / window_size)) * window_size
