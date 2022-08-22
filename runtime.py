@@ -90,7 +90,8 @@ def forward_hook_bandwidth_detect(module, _inputs, outputs) -> None:
     with monitoring._monitor_ctx_lock:
         tag = monitoring._monitor_ctx.get_tag(key=MONITORING_KEY_SEND)
         window_size = monitoring._monitor_ctx.get_window_size(key=MONITORING_KEY_SEND)
-        send_rate = monitoring._monitor_ctx.get_window_heartrate(key = MONITORING_KEY_SEND)
+        heartrate = monitoring._monitor_ctx.get_window_heartrate(key = MONITORING_KEY_SEND)
+    send_rate = heartrate * module.microbatch_size.item()
     # Only adapt at window period intervals
     if tag > 0 and tag % window_size == 0:
         if send_rate < TARGET_SEND_RATE:
@@ -107,7 +108,7 @@ def forward_hook_bandwidth_detect(module, _inputs, outputs) -> None:
                 module.quant_bit = torch.tensor(2)
         else:
             module.quant_bit = torch.tensor(0)
-    monitoring_send_rate.append(send_rate * module.microbatch_size.item())
+    monitoring_send_rate.append(send_rate)
     monitoring_quant_bit.append(module.quant_bit.item() if module.quant_bit.item()!=0 else 32)
 
 def forward_pre_hook_monitor(_module, _inputs) -> None:
