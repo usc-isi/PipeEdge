@@ -966,6 +966,7 @@ def main() -> None:
 
     tik = time.time()
     init_env(args.device, args.addr, args.port, args.socket_ifname)
+    monitoring._PRINT_FIELDS_INSTANT = False
 
     def _run():
         if args.comm == 'p2p':
