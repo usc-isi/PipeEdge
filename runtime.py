@@ -59,7 +59,7 @@ MONITORING_KEY_SEND = 'send'
 
 PLOT_DATAPOINT_NUMBER = 100
 PLOT_TIME_INTERVAL = 0.5
-TARGET_SEND_RATE = 12.0
+TARGET_SEND_RATE = 100.0
 
 monitoring_output_perf = []
 monitoring_output_acc = []
@@ -90,24 +90,28 @@ def forward_hook_bandwidth_detect(module, _inputs, outputs) -> None:
     with monitoring._monitor_ctx_lock:
         tag = monitoring._monitor_ctx.get_tag(key=MONITORING_KEY_SEND)
         window_size = monitoring._monitor_ctx.get_window_size(key=MONITORING_KEY_SEND)
+        bandwidth = monitoring._monitor_ctx.get_window_perf(key=MONITORING_KEY_SEND)
+        send_work = monitoring._monitor_ctx.get_window_work(key=MONITORING_KEY_SEND)
         heartrate = monitoring._monitor_ctx.get_window_heartrate(key = MONITORING_KEY_SEND)
     send_rate = heartrate * module.microbatch_size.item()
     # Only adapt at window period intervals
     if tag > 0 and tag % window_size == 0:
-        if send_rate < TARGET_SEND_RATE:
-            compress_ratio = int(TARGET_SEND_RATE/send_rate)+1
-            if compress_ratio <= 2:
-                module.quant_bit = torch.tensor(16)
-            elif compress_ratio <=4:
-                module.quant_bit = torch.tensor(8)
-            elif compress_ratio ==5:
-                module.quant_bit = torch.tensor(6)
-            elif compress_ratio <=8:
-                module.quant_bit = torch.tensor(4)
-            else:
-                module.quant_bit = torch.tensor(2)
-        else:
+        target_time = module.microbatch_size.item() * window_size / TARGET_SEND_RATE
+        target_datasize = target_time * bandwidth
+        compress_ratio = int(send_work*(32/module.quant_bit.item())/target_datasize)+1\
+                            if module.quant_bit.item() != 0 else int(send_work/target_datasize)+1
+        if compress_ratio <=1:
             module.quant_bit = torch.tensor(0)
+        elif compress_ratio <= 2:
+            module.quant_bit = torch.tensor(16)
+        elif compress_ratio <=4:
+            module.quant_bit = torch.tensor(8)
+        elif compress_ratio <=5:
+            module.quant_bit = torch.tensor(6)
+        elif compress_ratio <=8:
+            module.quant_bit = torch.tensor(4)
+        elif compress_ratio :
+            module.quant_bit = torch.tensor(2)
     monitoring_send_rate.append(send_rate)
     monitoring_quant_bit.append(module.quant_bit.item() if module.quant_bit.item()!=0 else 32)
 
