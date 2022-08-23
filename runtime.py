@@ -61,7 +61,6 @@ PLOT_DATAPOINT_NUMBER = 100
 PLOT_TIME_INTERVAL = 0.5
 TARGET_SEND_RATE = 12.0
 
-monitoring_model_perf = []
 monitoring_output_perf = []
 monitoring_output_acc = []
 monitoring_send_perf = []
@@ -123,9 +122,6 @@ def forward_hook_monitor(module, _inputs, outputs) -> None:
     # Measure accuracy as the number of layers processed
     n_layers = module.end_layer - module.start_layer + 1
     monitoring.iteration(MONITORING_KEY_MODEL, work=n_items, accuracy=n_layers)
-    with monitoring._monitor_ctx_lock:
-        perf = monitoring._monitor_ctx.get_window_perf(key=MONITORING_KEY_MODEL)
-    monitoring_model_perf.append(perf)
 
 def forward_pre_hook_quant_decode_start(_module, _inputs) -> None:
     """Register quantization decode start."""
@@ -959,17 +955,11 @@ def main() -> None:
     plt_cfg = parser.add_argument_group('Plot tuning')
     plt_cfg.add_argument("-ppn", "--plot-point-num", default=100, type=int,
                         help="the range of polt xaxi; recommand [100|1000] on device [cpu|cuda]")
-    plt_cfg.add_argument("-tsr", "--target-send-rate", default=12.0, type=float,
-                        help="the target send rate used for adaptive quantization")
-    plt_cfg.add_argument("-trr", "--target-send-rate-ratio", default=0.9, type=float,
-                        help="the target send rate used for adaptive quantization")
     args = parser.parse_args()
 
     # Change the global value
     global PLOT_DATAPOINT_NUMBER
-    global TARGET_SEND_RATE
     PLOT_DATAPOINT_NUMBER = args.plot_point_num
-    TARGET_SEND_RATE = args.target_send_rate
 
 
 
