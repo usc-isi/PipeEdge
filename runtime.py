@@ -760,23 +760,30 @@ class MainWindow(QMainWindow):
         pagelayout.addLayout(button_layout)
         pagelayout.addLayout(config_layout)
 
+        button_layout_font = QFont('Times', 16)
         self.strt_btn = QPushButton("Start")
+        self.strt_btn.setFont(button_layout_font)
         self.strt_btn.pressed.connect(self.start_task)
         button_layout.addWidget(self.strt_btn)
-
         self.pause_btn = QPushButton("Pause")
+        self.pause_btn.setFont(button_layout_font)
         self.pause_btn.pressed.connect(self.pause_task)
         button_layout.addWidget(self.pause_btn)
-
         self.stp_btn = QPushButton("Stop")
+        self.stp_btn.setFont(button_layout_font)
         self.stp_btn.pressed.connect(self.stop_task)
         button_layout.addWidget(self.stp_btn)
 
-        config_layout.addWidget(QLabel("Set Rate Constraint (images/sec):"))
+        config_layout_font = QFont('Times', 16)
+        constraint_lbl = QLabel("Set Rate Constraint (images/sec):")
+        constraint_lbl.setFont(config_layout_font)
+        config_layout.addWidget(constraint_lbl)
         self.target_rate_txtbox = QLineEdit()
+        self.target_rate_txtbox.setFont(config_layout_font)
         # self.target_rate_txtbox.editingFinished.connect(self.set_target_rate_task)
         config_layout.addWidget(self.target_rate_txtbox)
         target_rate_btn = QPushButton("Set")
+        target_rate_btn.setFont(config_layout_font)
         target_rate_btn.pressed.connect(self.set_target_rate_task)
         config_layout.addWidget(target_rate_btn)
 
@@ -801,8 +808,8 @@ class MainWindow(QMainWindow):
         for i in range(self.ROW_NUM_FIGS):
             for j in range(self.COL_NUM_FIGS):
                 if self.fig_titles[i*self.COL_NUM_FIGS+j] != "":
-                    bottom_lbl_style = {'font-size': '18pt'}
-                    left_lbl_style = {'font-size': '18pt'}
+                    bottom_lbl_style = {'font-size': '16pt'}
+                    left_lbl_style = {'font-size': '16pt'}
                     self.graphWidgets[i*self.COL_NUM_FIGS+j].setBackground('w')
                     self.graphWidgets[i*self.COL_NUM_FIGS+j].setXRange(0, PLOT_DATAPOINT_NUMBER, padding=0)
                     self.graphWidgets[i*self.COL_NUM_FIGS+j].setLabel(axis='bottom', text='Microbatch', **bottom_lbl_style)
