@@ -714,10 +714,10 @@ class Worker(QRunnable):
 
 class MainWindow(QMainWindow):
     """GUI main window"""
-    def __init__(self):
+    def __init__(self, rank: int):
         super().__init__()
 
-        self.setWindowTitle("PipeEdge Performance Monitor")
+        self.setWindowTitle(f"PipeEdge Performance Monitor - Rank {rank}")
         self.TOT_NUM_FIGS = len(fig_titles)
         self.COL_NUM_FIGS = floor(sqrt(self.TOT_NUM_FIGS))
         self.ROW_NUM_FIGS = ceil(self.TOT_NUM_FIGS/self.COL_NUM_FIGS)
@@ -1002,7 +1002,7 @@ def main() -> None:
     if args.gui:
         data_start_counter.reset()
         app = QApplication([""])
-        window = MainWindow()
+        window = MainWindow(args.rank)
         window.show()
         app.exec()
 
