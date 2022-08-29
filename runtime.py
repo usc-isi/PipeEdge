@@ -11,7 +11,7 @@ import numpy as np
 from PIL import Image
 import requests
 import torch
-from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset
+from torch.utils.data import DataLoader, Dataset, Subset
 from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 from pipeedge.comm.p2p import DistP2pContext
 from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
@@ -22,6 +22,7 @@ from pipeedge.sched.scheduler import sched_pipeline
 import devices
 import model_cfg
 import monitoring
+from utils.data import RolloverTensorDataset
 
 logger = logging.getLogger(__name__)
 
@@ -292,7 +293,7 @@ def load_dataset(model_name: str, batch_size: int, indices: Optional[Sequence]=N
             labels = torch.tensor(bert_inputs['label'][:batch_size])
         tokenizer = BertTokenizer.from_pretrained(model_name)
         inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
-        dataset = TensorDataset(inputs, labels)
+        dataset = RolloverTensorDataset(batch_size, inputs, labels)
     else:
         if model_name in ['facebook/deit-base-distilled-patch16-224',
                           'facebook/deit-small-distilled-patch16-224',
@@ -303,10 +304,8 @@ def load_dataset(model_name: str, batch_size: int, indices: Optional[Sequence]=N
         ## random data
         # image = torch.randn(3, 384, 384)
         image = Image.open(requests.get(IMG_URL, stream=True).raw)
-        imgs = [image for i in range(batch_size)]
-        inputs = feature_extractor(images=imgs, return_tensors="pt")['pixel_values']
-        labels = torch.tensor([IMG_LABEL_IDX] * batch_size)
-        dataset = TensorDataset(inputs, labels)
+        inputs = feature_extractor(images=[image], return_tensors="pt")['pixel_values']
+        dataset = RolloverTensorDataset(batch_size, inputs, torch.tensor([IMG_LABEL_IDX]))
     if indices is not None:
         dataset = Subset(dataset, indices)
     return dataset
