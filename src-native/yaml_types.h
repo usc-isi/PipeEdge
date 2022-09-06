@@ -5,6 +5,7 @@
 #include <map>
 #include <vector>
 #include <yaml-cpp/yaml.h>
+#include "schedule.h"
 
 struct yaml_model {
   size_t layers;
@@ -30,11 +31,7 @@ struct yaml_device_type {
   std::map<std::string, std::vector<yaml_model_profile>> model_profiles;
 };
 
-struct yaml_schedule_stage {
-  std::string host;
-  size_t layer_l;
-  size_t layer_r;
-};
+typedef host_sched_stage yaml_schedule_stage;
 
 namespace YAML {
   template<>

@@ -23,7 +23,7 @@ add_compile_options(-Wall -Wextra)
 
 find_package(yaml-cpp REQUIRED)
 
-add_executable(sched-pipeline sched-pipeline.cpp)
+add_executable(sched-pipeline sched-pipeline.cpp schedule.cpp)
 target_link_libraries(sched-pipeline PRIVATE yaml-cpp)
 
 install(TARGETS sched-pipeline
