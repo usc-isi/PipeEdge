@@ -1,7 +1,8 @@
 """Data utilities."""
-from typing import Tuple
+import random
+from typing import Callable, Sequence, Tuple, Union
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset
 
 class RolloverTensorDataset(Dataset[Tuple[torch.Tensor, ...]]):
     """Like `TensorDataset`, but rolls over when the requested length exceeds the actual length."""
@@ -17,3 +18,69 @@ class RolloverTensorDataset(Dataset[Tuple[torch.Tensor, ...]]):
 
     def __len__(self):
         return self.length
+
+
+class DatasetsDataset(Dataset[Tuple]):
+    """Extract values from a `datasets.Dataset` into a tuple."""
+
+    def __init__(self, dataset: 'datasets.Dataset', keys: Sequence):
+        self.dataset = dataset
+        self.keys = keys
+
+    def __getitem__(self, index):
+        item = self.dataset[index]
+        return tuple(item[key] for key in self.keys)
+
+    def __len__(self):
+        return len(self.dataset)
+
+
+def load_dataset_subset(dataset: Dataset, size: int, shuffle: bool=False) -> Dataset:
+    """Get a Dataset subset."""
+    if shuffle:
+        indices = [random.randint(0, len(dataset)) for _ in range(size)]
+    else:
+        indices = list(range(size))
+    return Subset(dataset, indices)
+
+
+# NOTE: We're importing dataset dependencies within functions---rather than at the top level---to
+#       allow for reduced runtime dependencies on systems that don't need all datasets.
+
+
+def load_dataset_glue(tokenizer: Callable, config: str, split: str, ubatch_size: int,
+                      tok_padding: Union[bool, str]=True) -> Dataset:
+    """Create a GLUE dataset."""
+    # pylint: disable=import-outside-toplevel
+    import datasets
+    # When doing inference in batches (ubatch_size > 1), each item (tokenized sentence) in a batch
+    # must have the same length, which requires padding shorter sentences in the batch.
+    # 'transform' only operates on single items, so we'd be forced to use padding='max_length',
+    # which always forces very long tensors, resulting in slower inference.
+    # 'map' operates on batches, which allows for per-batch padding optimization.
+    # 'transform' runs on-the-fly during dataset iteration, 'map' runs in advance and caches data.
+    def map_function(batch):
+        """Tokenize sentences in microbatches."""
+        # Using return_tensors='pt' requires splitting the tensors afterward.
+        # Use a numpy array instead, which will be stacked into a single PyTorch tensor later.
+        encoding = tokenizer(batch['sentence'], padding=tok_padding, truncation=True,
+                             return_tensors='np')
+        batch.update(encoding)
+        return batch
+    # This datasets.Dataset should be copmatible with a pytorch Dataset
+    dataset = datasets.load_dataset('glue', name=config, split=split)
+    dataset = dataset.map(function=map_function, batched=True, batch_size=ubatch_size,
+                          remove_columns=['sentence'])
+    dataset.set_format(type='torch')
+    return DatasetsDataset(dataset, ['input_ids', 'label'])
+
+
+def load_dataset_imagenet(feature_extractor: Callable, root: str, split: str='train') -> Dataset:
+    """Get the ImageNet dataset."""
+    # pylint: disable=import-outside-toplevel
+    from torchvision.datasets import ImageNet
+    def transform(img):
+        pixels = feature_extractor(images=img.convert('RGB'), return_tensors='pt')['pixel_values']
+        # feature extractor expects a batch but we only have a single image, so drop the outer dim
+        return pixels[0]
+    return ImageNet(root, split=split, transform=transform)
