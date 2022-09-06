@@ -6,13 +6,13 @@ import queue
 import sys
 import threading
 import time
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Optional, Tuple, Union
 import numpy as np
 from PIL import Image
 import requests
 import torch
-from torch.utils.data import DataLoader, Dataset, Subset
-from transformers import BertTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
+from torch.utils.data import DataLoader, Dataset
+from transformers import AutoTokenizer, DeiTFeatureExtractor, ViTFeatureExtractor
 from pipeedge.comm.p2p import DistP2pContext
 from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
 from pipeedge import models
@@ -22,7 +22,7 @@ from pipeedge.sched.scheduler import sched_pipeline
 import devices
 import model_cfg
 import monitoring
-from utils.data import RolloverTensorDataset
+from utils import data
 
 logger = logging.getLogger(__name__)
 
@@ -284,30 +284,48 @@ def get_pipeline_sched(world_size: int, hosts: Optional[List[str]],
     return stage_layers, stage_quant, stage_ranks
 
 
-def load_dataset(model_name: str, batch_size: int, indices: Optional[Sequence]=None) -> Dataset:
+def _get_feature_extractor(model_name: str):
+    if model_name in ['facebook/deit-base-distilled-patch16-224',
+                      'facebook/deit-small-distilled-patch16-224',
+                      'facebook/deit-tiny-distilled-patch16-224']:
+        feature_extractor = DeiTFeatureExtractor.from_pretrained(model_name)
+    else:
+        feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
+    return feature_extractor
+
+
+def load_dataset(dataset_cfg: dict, model_name: str, batch_size: int, ubatch_size: int) -> Dataset:
     """Load inputs based on model."""
-    if model_name in ['bert-base-uncased', 'bert-large-uncased',
-                      'textattack/bert-base-uncased-CoLA']:
+    dataset_name = dataset_cfg['name']
+    dataset_root = dataset_cfg['root']
+    dataset_split = dataset_cfg['split']
+    dataset_shuffle = dataset_cfg['shuffle']
+    if dataset_name == 'CoLA':
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        dataset = data.load_dataset_glue(tokenizer, 'cola', dataset_split, ubatch_size)
+        dataset = data.load_dataset_subset(dataset, batch_size, shuffle=dataset_shuffle)
+    elif dataset_name == 'ImageNet':
+        if dataset_root is None:
+            dataset_root = 'ImageNet'
+            logging.info("Dataset root not set, assuming: %s", dataset_root)
+        feature_extractor = _get_feature_extractor(model_name)
+        dataset = data.load_dataset_imagenet(feature_extractor, dataset_root, split=dataset_split)
+        dataset = data.load_dataset_subset(dataset, batch_size, shuffle=dataset_shuffle)
+    elif model_name in ['bert-base-uncased', 'bert-large-uncased',
+                        'textattack/bert-base-uncased-CoLA']:
         with np.load("bert_input.npz") as bert_inputs:
             inputs_sentence = list(bert_inputs['input'][:batch_size])
             labels = torch.tensor(bert_inputs['label'][:batch_size])
-        tokenizer = BertTokenizer.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
         inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
-        dataset = RolloverTensorDataset(batch_size, inputs, labels)
+        dataset = data.RolloverTensorDataset(batch_size, inputs, labels)
     else:
-        if model_name in ['facebook/deit-base-distilled-patch16-224',
-                          'facebook/deit-small-distilled-patch16-224',
-                          'facebook/deit-tiny-distilled-patch16-224']:
-            feature_extractor = DeiTFeatureExtractor.from_pretrained(model_name)
-        else:
-            feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
+        feature_extractor = _get_feature_extractor(model_name)
         ## random data
         # image = torch.randn(3, 384, 384)
         image = Image.open(requests.get(IMG_URL, stream=True).raw)
         inputs = feature_extractor(images=[image], return_tensors="pt")['pixel_values']
-        dataset = RolloverTensorDataset(batch_size, inputs, torch.tensor([IMG_LABEL_IDX]))
-    if indices is not None:
-        dataset = Subset(dataset, indices)
+        dataset = data.RolloverTensorDataset(batch_size, inputs, torch.tensor([IMG_LABEL_IDX]))
     return dataset
 
 
@@ -328,8 +346,9 @@ def handle_cmd(cmd: int, tensors: Tuple[torch.Tensor, ...]) -> None:
 def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Optional[str],
                      batch_size: int, ubatch_size: int, partition: Optional[List[Tuple[int, int]]],
                      quant: Optional[List[int]], rank_order: Optional[List[int]], data_rank: int,
-                     hosts: Optional[List[str]], sched_models_file: Optional[str],
-                     sched_dev_types_file: Optional[str], sched_dev_file: Optional[str]) -> None:
+                     hosts: Optional[List[str]], dataset_cfg: dict,
+                     sched_models_file: Optional[str], sched_dev_types_file: Optional[str],
+                     sched_dev_file: Optional[str]) -> None:
     """Run the pipeline using P2P communication."""
     monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
     monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='correct')
@@ -392,7 +411,7 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
             stage_ctx.register_send_pre_hook(p2p_pre_hook_monitor, (MONITORING_KEY_SEND,))
             stage_ctx.register_send_post_hook(p2p_post_hook_monitor, (MONITORING_KEY_SEND,))
             if rank == data_rank:
-                dataset = load_dataset(model_name, batch_size)
+                dataset = load_dataset(dataset_cfg, model_name, batch_size, ubatch_size)
                 data_loader = DataLoader(dataset, batch_size=ubatch_size)
                 tik_data = time.time()
                 # start results monitoring - see comments in handle_results
@@ -418,9 +437,9 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
 def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Optional[str],
                      batch_size: int, ubatch_size: int, partition: Optional[List[Tuple[int, int]]],
                      quant: Optional[List[int]], rank_order: Optional[List[int]], data_rank: int,
-                     hosts: Optional[List[str]], sched_models_file: Optional[str],
-                     sched_dev_types_file: Optional[str], sched_dev_file: Optional[str],
-                     rpc_num_worker_threads: int) -> None:
+                     hosts: Optional[List[str]], dataset_cfg: dict,
+                     sched_models_file: Optional[str], sched_dev_types_file: Optional[str],
+                     sched_dev_file: Optional[str], rpc_num_worker_threads: int) -> None:
     """Run the pipeline using RPC communication."""
     monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
     monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='confidence')
@@ -454,7 +473,7 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
             logger.info("Stage ranks: %s", stage_ranks)
             logger.info("Data rank: %s", data_rank)
         if rank == data_rank:
-            dataset = load_dataset(model_name, batch_size)
+            dataset = load_dataset(dataset_cfg, model_name, batch_size, ubatch_size)
             data_loader = DataLoader(dataset, batch_size=ubatch_size)
             # Create model shards on workers (requires distributed context to be initialized)
             pipeline = model_cfg.dist_rpc_pipeline_factory(model_name, model_file, stage_ranks,
@@ -550,6 +569,18 @@ def main() -> None:
     # Input options
     parser.add_argument("-b", "--batch-size", default=64, type=int, help="batch size")
     parser.add_argument("-u", "--ubatch-size", default=8, type=int, help="microbatch size")
+    # Dataset options
+    dset = parser.add_argument_group('Dataset arguments')
+    dset.add_argument("--dataset-name", type=str, choices=['CoLA', 'ImageNet'],
+                      help="dataset to use")
+    dset.add_argument("--dataset-root", type=str,
+                      help="dataset root directory (e.g., for 'ImageNet', must contain "
+                           "'ILSVRC2012_devkit_t12.tar.gz' and at least one of: "
+                           "'ILSVRC2012_img_train.tar', 'ILSVRC2012_img_val.tar'")
+    dset.add_argument("--dataset-split", default='train', type=str,
+                      help="dataset split (depends on dataset), e.g.: train, val, validation, test")
+    dset.add_argument("--dataset-shuffle", default=False, type=bool,
+                      help="dataset shuffle")
     # Scheduling options (grouped)
     usched = parser.add_argument_group('User-defined scheduling')
     usched.add_argument("-pt", "--partition", type=str,
@@ -586,6 +617,13 @@ def main() -> None:
                              "devices <= HOSTS")
     args = parser.parse_args()
 
+    dataset_cfg = {
+        'name': args.dataset_name,
+        'root': args.dataset_root,
+        'split': args.dataset_split,
+        'shuffle': args.dataset_shuffle,
+    }
+
     if args.partition is None:
         partition = None
     else:
@@ -601,13 +639,13 @@ def main() -> None:
     if args.comm == 'p2p':
         run_pipeline_p2p(args.worldsize, args.rank, args.model_name, args.model_file,
                          args.batch_size, args.ubatch_size, partition, quant, rank_order,
-                         args.data_rank, hosts, args.sched_models_file, args.sched_dev_types_file,
-                         args.sched_dev_file)
+                         args.data_rank, hosts, dataset_cfg, args.sched_models_file,
+                         args.sched_dev_types_file, args.sched_dev_file)
     else:
         run_pipeline_rpc(args.worldsize, args.rank, args.model_name, args.model_file,
                          args.batch_size, args.ubatch_size, partition, quant, rank_order,
-                         args.data_rank, hosts, args.sched_models_file, args.sched_dev_types_file,
-                         args.sched_dev_file, args.worker_threads)
+                         args.data_rank, hosts, dataset_cfg, args.sched_models_file,
+                         args.sched_dev_types_file, args.sched_dev_file, args.worker_threads)
     tok = time.time()
     logger.info("Total program execution time = %f", tok - tik)
 
