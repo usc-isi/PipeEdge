@@ -12,9 +12,11 @@ class ModuleShardConfig:
 
     def __init__(self, **kwargs: dict):
         # Attributes with default values
-        self.stage = kwargs.pop('stage', 0)
-        self.layer_start = kwargs.pop('layer_start', 0)
-        self.layer_end = kwargs.pop('layer_end', 0)
+        self.stage: int = kwargs.pop('stage', 0)
+        self.layer_start: int = kwargs.pop('layer_start', 0)
+        self.layer_end: int = kwargs.pop('layer_end', 0)
+        self.is_first: bool = kwargs.pop('is_first', False)
+        self.is_last: bool = kwargs.pop('is_last', False)
 
         # Attributes without default values
         for key, value in kwargs.items():

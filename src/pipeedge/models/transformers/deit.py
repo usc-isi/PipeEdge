@@ -42,11 +42,8 @@ def _forward_kernel(layer, x, skip, kernel_id):
 class DeiTTransformerShard(TransformerShard):
     """DeiT transformer shard."""
 
-    def __init__(self, stage: int, model_name: str, model_weights: Union[str, Mapping],
-                 is_first: bool, is_last: bool, start_layer: int, end_layer: int,
-                 load_weight: bool=True):
-        shard_config = ModuleShardConfig(stage=stage, layer_start=start_layer, layer_end=end_layer,
-                                         is_first=is_first, is_last=is_last)
+    def __init__(self, shard_config: ModuleShardConfig, model_name: str,
+                 model_weights: Union[str, Mapping], load_weight: bool=True):
         super().__init__(shard_config, model_name, model_weights, load_weight)
         self.embeddings = None
         self.layernorm = None

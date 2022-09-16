@@ -33,11 +33,8 @@ def _forward_kernel(layer, x, skip, kernel_id):
 class BertTransformerShard(TransformerShard):
     """BERT transformer shard."""
 
-    def __init__(self, stage: int, model_name: str, model_weights: Union[str, Mapping],
-                 is_first: bool, is_last: bool, start_layer: int, end_layer: int,
-                 load_weight: bool=True):
-        shard_config = ModuleShardConfig(stage=stage, layer_start=start_layer, layer_end=end_layer,
-                                         is_first=is_first, is_last=is_last)
+    def __init__(self, shard_config: ModuleShardConfig, model_name: str,
+                 model_weights: Union[str, Mapping], load_weight: bool=True):
         super().__init__(shard_config, model_name, model_weights, load_weight)
         self.embeddings = None
 
@@ -287,11 +284,8 @@ class BertTransformerShard(TransformerShard):
 class BertTransformerShardForSequenceClassification(TransformerShard):
     """BERT transformer shard for sequence classification."""
 
-    def __init__(self, stage: int, model_name: str, model_weights: Union[str, Mapping],
-                 is_first: bool, is_last: bool, start_layer: int, end_layer: int,
-                 load_weight: bool=True):
-        shard_config = ModuleShardConfig(stage=stage, layer_start=start_layer, layer_end=end_layer,
-                                         is_first=is_first, is_last=is_last)
+    def __init__(self, shard_config: ModuleShardConfig, model_name: str,
+                 model_weights: Union[str, Mapping], load_weight: bool=True):
         super().__init__(shard_config, model_name, model_weights, load_weight)
         self.bert = None
         self.classifier = None
@@ -318,9 +312,7 @@ class BertTransformerShardForSequenceClassification(TransformerShard):
             for key, val in weights.items():
                 if key.startswith('bert.'):
                     bert_weights[key[len('bert.'):]] = val
-        self.bert = BertTransformerShard(self.shard_config.stage, self.model_name, bert_weights,
-                                         self.shard_config.is_first, self.shard_config.is_last,
-                                         self.shard_config.layer_start, self.shard_config.layer_end,
+        self.bert = BertTransformerShard(self.shard_config, self.model_name, bert_weights,
                                          self.load_weight)
 
         if self.shard_config.is_last:
