@@ -47,6 +47,10 @@ class ViTTransformerShard(TransformerShard):
                  load_weight: bool=True):
         super().__init__(stage, model_name, model_weights, is_first, is_last, start_layer, end_layer,
                          load_weight)
+        if self.model_name == 'google/vit-huge-patch14-224-in21k':
+            # This ViT-Huge model doesn't include classification, so we have to set this ourselves
+            # NOTE: not setting 'id2label' or 'label2id'
+            self.config.num_labels = 21843
         self.embeddings = None
         self.layernorm = None
         self.classifier = None
@@ -108,12 +112,9 @@ class ViTTransformerShard(TransformerShard):
 
         ## last Shard
         if self.is_last:
-            num_label = self.config.num_labels
             self.layernorm = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
             logger.debug(">>>> Load layernorm for the last shard")
-            if self.model_name == 'google/vit-huge-patch14-224-in21k':
-                num_label = 21843
-            self.classifier = nn.Linear(self.config.hidden_size, num_label) if self.config.num_labels > 0 else nn.Identity()
+            self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels) if self.config.num_labels > 0 else nn.Identity()
             logger.debug(">>>> Load classifier for the last shard")
             if self.load_weight:
                 self._load_layer_weights(weights, 0, None, load_first = False, load_last=True, load_kernel = False, kernel_id=None)
