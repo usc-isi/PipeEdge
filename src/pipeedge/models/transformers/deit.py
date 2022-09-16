@@ -107,12 +107,9 @@ class DeiTTransformerShard(TransformerShard):
 
         ## last Shard
         if self.is_last:
-            num_label = self.config.num_labels
             self.layernorm = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
             logger.debug(">>>> Load layernorm for the last shard")
-            if self.model_name == 'google/vit-huge-patch14-224-in21k':
-                num_label = 21843
-            self.classifier = nn.Linear(self.config.hidden_size, num_label) if self.config.num_labels > 0 else nn.Identity()
+            self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels) if self.config.num_labels > 0 else nn.Identity()
             logger.debug(">>>> Load classifier for the last shard")
             if self.load_weight:
                 self._load_layer_weights(weights, 0, None, load_first = False, load_last=True, load_kernel = False, kernel_id=None)
