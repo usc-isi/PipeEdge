@@ -26,7 +26,7 @@ class TransformerShard(ModuleShard):
 
         ## operations/transformer layers set
         self.first_ops = nn.ModuleList()
-        self.vit_layers = nn.ModuleList()
+        self.model_layers = nn.ModuleList()
         self.last_ops = nn.ModuleList()
 
     @staticmethod

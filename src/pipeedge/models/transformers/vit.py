@@ -92,7 +92,7 @@ class ViTTransformerShard(TransformerShard):
             layer = ViTLayer(self.config)
             if self.load_weight:
                 layer = self._load_layer_weights(weights, math.ceil(current_layer_idx/4)-1, layer)
-            self.vit_layers.append(layer)
+            self.model_layers.append(layer)
             logger.debug(">>>> Load the %d-th ViT Layer, load weight is %s",
                           math.ceil(current_layer_idx/4)-1, self.load_weight)
             current_layer_idx += 4
@@ -269,7 +269,7 @@ class ViTTransformerShard(TransformerShard):
         for i, op in enumerate(self.first_ops):
             x, skip = _forward_kernel(op, x, skip, (self.shard_config.layer_start+i)%4)
 
-        for i, layer in enumerate(self.vit_layers):
+        for i, layer in enumerate(self.model_layers):
             logger.debug("Before %d: %d MB", i, self.process.memory_info().rss / 1000000)
             x = layer(x)[0]
             logger.debug("After %d: %d MB", i, self.process.memory_info().rss / 1000000)

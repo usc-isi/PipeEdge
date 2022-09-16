@@ -80,7 +80,7 @@ class BertTransformerShard(TransformerShard):
             if self.load_weight:
                 layer = self._load_layer_weights(weights, math.ceil(current_layer_idx/4)-1, layer)
             layer.eval()
-            self.vit_layers.append(layer)
+            self.model_layers.append(layer)
             logger.debug(">>>> Load the %d-th %s Layer, load weight is %s",
                           math.ceil(current_layer_idx/4)-1, self.model_name, self.load_weight)
             current_layer_idx += 4
@@ -248,7 +248,7 @@ class BertTransformerShard(TransformerShard):
         for i, op in enumerate(self.first_ops):
             x, skip = _forward_kernel(op, x, skip, (self.shard_config.layer_start+i)%4)
 
-        for layer in self.vit_layers:
+        for layer in self.model_layers:
             with torch.no_grad():
                 x = layer(x)[0]
                 skip = x
