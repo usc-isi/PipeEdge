@@ -21,10 +21,6 @@ class TransformerShard(ModuleShard):
         self.model_weights = model_weights
         self.load_weight = load_weight
 
-        self.operators_list = [ "LayerNorm + Attention",
-                                "Attention Output + residuel Connection",
-                                "LayerNorm + MLP-1",
-                                "MLP-2 + residuel Connection" ]
         self.process = psutil.Process(os.getpid())
         self.config = AutoConfig.from_pretrained(model_name)
 

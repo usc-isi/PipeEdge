@@ -82,8 +82,7 @@ class ViTTransformerShard(TransformerShard):
         if self.shard_config.layer_start %4 != 1 or (self.shard_config.layer_start+3 > self.shard_config.layer_end):
             logger.debug(">>>> For the first model part, load weight is %s:", self.load_weight)
             for i in range(self.shard_config.layer_start, min(self.shard_config.layer_end, math.ceil(self.shard_config.layer_start/4)*4)+1):
-                logger.debug("    Load the %d-th operation (%s) for %d-th vit layer",
-                              i%4, self.operators_list[(i-1)%4], math.ceil(i/4)-1)
+                logger.debug("    Load the %d-th operation for %d-th layer", i%4, math.ceil(i/4)-1)
                 layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
                 self.first_ops.append(layer)
             current_layer_idx = min(self.shard_config.layer_end+1, math.ceil(self.shard_config.layer_start/4)*4+1)
@@ -102,8 +101,7 @@ class ViTTransformerShard(TransformerShard):
         if self.shard_config.layer_end >= current_layer_idx:
             logger.debug(">>>> For the last model part, load weight is %s:", self.load_weight)
         for i in range(current_layer_idx, self.shard_config.layer_end+1):
-            logger.debug("    Load the %d-th operation (%s) for %d-th vit layer",
-                          i%4, self.operators_list[(i-1)%4], math.ceil(i/4)-1)
+            logger.debug("    Load the %d-th operation for %d-th layer", i%4, math.ceil(i/4)-1)
             layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
             if self.load_weight:
                 layer = self._load_layer_weights(weights, math.ceil(i/4)-1, layer, False, False, True, i%4)
