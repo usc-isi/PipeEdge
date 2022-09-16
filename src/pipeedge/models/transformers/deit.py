@@ -54,52 +54,47 @@ class DeiTTransformerShard(TransformerShard):
             if isinstance(model_weights, str):
                 logger.debug(">>>> Load weight file: %s", self.model_weights)
                 with np.load(self.model_weights) as weights:
-                    self._make_layer(weights)
+                    self._build_shard(weights)
             else:
-                self._make_layer(model_weights)
+                self._build_shard(model_weights)
         else:
-            self._make_layer(None)
+            self._build_shard(None)
 
         logger.info("======= Finish Build DeiTTransformerShard%d ==========", self.shard_config.stage)
 
-    def _make_layer(self, weights):
+    def _build_shard(self, weights):
         ## first Shard
         if self.shard_config.is_first:
             self.embeddings = DeiTEmbeddings(self.config)
             logger.debug(">>>> Load embeddings layer for the first shard")
             if self.load_weight:
-                self._load_layer_weights(weights, 0, None, load_first = True, load_last=False, load_kernel = False, kernel_id=None)
-                logger.debug(">>>> Load weights for embeddings layer")
+                self._load_layer_weights(weights, 0, None, load_first=True)
 
         current_layer_idx = self.shard_config.layer_start
 
-        ## first ununit part
+        ## partial model layer
         if self.shard_config.layer_start %4 != 1 or (self.shard_config.layer_start+3 > self.shard_config.layer_end):
-            logger.debug(">>>> For the first model part, load weight is %s:", self.load_weight)
             for i in range(self.shard_config.layer_start, min(self.shard_config.layer_end, math.ceil(self.shard_config.layer_start/4)*4)+1):
                 logger.debug("    Load the %d-th operation for %d-th layer", i%4, math.ceil(i/4)-1)
-                layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
+                layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1)
                 self.first_ops.append(layer)
             current_layer_idx = min(self.shard_config.layer_end+1, math.ceil(self.shard_config.layer_start/4)*4+1)
 
-        ## mid unit part, the whole vit_layer
+        ## whole model layers
         while current_layer_idx + 3 <= self.shard_config.layer_end:
             layer = ViTLayer(self.config)
             if self.load_weight:
-                layer = self._load_layer_weights(weights, math.ceil(current_layer_idx/4)-1, layer)
+                self._load_layer_weights(weights, math.ceil(current_layer_idx/4)-1, layer)
             self.model_layers.append(layer)
-            logger.debug(">>>> Load the %d-th ViT Layer, load weight is %s",
-                          math.ceil(current_layer_idx/4)-1, self.load_weight)
+            logger.debug(">>>> Load the %d-th layer", math.ceil(current_layer_idx/4)-1)
             current_layer_idx += 4
 
-        ## last unit part
-        if self.shard_config.layer_end >= current_layer_idx:
-            logger.debug(">>>> For the last model part, load weight is %s:", self.load_weight)
+        ## partial model layer after whole model layers
         for i in range(current_layer_idx, self.shard_config.layer_end+1):
             logger.debug("    Load the %d-th operation for %d-th layer", i%4, math.ceil(i/4)-1)
-            layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
+            layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1)
             if self.load_weight:
-                layer = self._load_layer_weights(weights, math.ceil(i/4)-1, layer, False, False, True, i%4)
+                self._load_layer_weights(weights, math.ceil(i/4)-1, layer, kernel_id=i%4)
             self.last_ops.append(layer)
 
         ## last Shard
@@ -109,16 +104,9 @@ class DeiTTransformerShard(TransformerShard):
             self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels) if self.config.num_labels > 0 else nn.Identity()
             logger.debug(">>>> Load classifier for the last shard")
             if self.load_weight:
-                self._load_layer_weights(weights, 0, None, load_first = False, load_last=True, load_kernel = False, kernel_id=None)
-                logger.debug(">>>> Load weights for layernorm and last shard")
+                self._load_layer_weights(weights, 0, None, load_last=True)
 
-
-        if self.load_weight:
-            logger.debug(">>>> Finish load weights")
-        else:
-            logger.debug(">>>> Do NOT load weights")
-
-    def _build_kernel(self, weights, kernel_id, vit_layer_id, load_weight=True):
+    def _build_kernel(self, weights, kernel_id, model_layer_id):
         layers = nn.ModuleList()
         if kernel_id == 1:
             layers.append(nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps))
@@ -130,12 +118,13 @@ class DeiTTransformerShard(TransformerShard):
             layers.append( ViTIntermediate(self.config))
         else:
             layers.append(ViTOutput(self.config))
-        if load_weight:
-            self._load_layer_weights(weights, vit_layer_id, layers, False, False, load_weight, kernel_id)
+        if self.load_weight:
+            self._load_layer_weights(weights, model_layer_id, layers, kernel_id=kernel_id)
         return layers
 
-    def _load_layer_weights(self, weights, id, transformer_layer, load_first = False, load_last=False, load_kernel = False, kernel_id=None):
-        ROOT = f"blocks.{id}."
+    def _load_layer_weights(self, weights, model_layer_id, transformer_layer,
+                            load_first=False, load_last=False, kernel_id=None):
+        ROOT = f"blocks.{model_layer_id}."
         ATTENTION_QKV = "attn.qkv."
         ATTENTION_OUT = "attn.proj."
         FC_0 = "mlp.fc1."
@@ -143,12 +132,12 @@ class DeiTTransformerShard(TransformerShard):
         ATTENTION_NORM = "norm1."
         MLP_NORM = "norm2."
         embed_dim = self.config.hidden_size
+
         if load_first:
             with torch.no_grad():
                 self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["pos_embed"])))
                 self.embeddings.patch_embeddings.projection.weight.copy_(torch.from_numpy(weights["patch_embed.proj.weight"]))
                 self.embeddings.patch_embeddings.projection.bias.copy_(torch.from_numpy(weights["patch_embed.proj.bias"]))
-                # logger.debug(">>>> Load embedding for the first shard")
 
         if load_last:
             with torch.no_grad():
@@ -156,11 +145,10 @@ class DeiTTransformerShard(TransformerShard):
                 self.layernorm.bias.copy_(torch.from_numpy(weights["norm.bias"]))
                 self.classifier.weight.copy_(torch.from_numpy(weights["head.weight"]))
                 self.classifier.bias.copy_(torch.from_numpy(weights["head.bias"]))
-                # logger.debug(">>>> Load Layernorm, classifier for the last shard")
 
-        if not load_first and not load_last:
+        if transformer_layer is not None:
             with torch.no_grad():
-                if not load_kernel:
+                if kernel_id is None:
                     qkv_f = str(ROOT + ATTENTION_QKV + "weight")
                     qkv_weight = weights[qkv_f]
                     query_weight = torch.from_numpy(qkv_weight[0:embed_dim,:])
@@ -243,8 +231,6 @@ class DeiTTransformerShard(TransformerShard):
                     mlp_bias_1 = torch.from_numpy(weights[ROOT + FC_1 + "bias"])
                     transformer_layer[0].dense.weight.copy_(mlp_weight_1)
                     transformer_layer[0].dense.bias.copy_(mlp_bias_1)
-
-        return transformer_layer
 
     @torch.no_grad()
     def forward(self, data: TransformerShardData) -> TransformerShardData:
