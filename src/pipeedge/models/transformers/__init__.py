@@ -5,7 +5,7 @@ from typing import Tuple, Type, Union
 import psutil
 from torch import nn, Tensor
 from transformers import AutoConfig
-from .. import ModuleShard
+from .. import ModuleShard, ModuleShardConfig
 
 TransformerShardData: Type = Union[Tensor, Tuple[Tensor, Tensor]]
 """A transformer shard input/output type."""
@@ -14,14 +14,11 @@ class TransformerShard(ModuleShard):
     """Abstract parent class for transformer shards."""
     # pylint: disable=abstract-method
 
-    def __init__(self, stage: int, model_name: str, model_weights: Union[str, Mapping],
-                 is_first: bool, is_last: bool, start_layer: int, end_layer: int,
-                 load_weight: bool):
-        super().__init__(stage, start_layer, end_layer)
+    def __init__(self, shard_config: ModuleShardConfig, model_name: str,
+                 model_weights: Union[str, Mapping], load_weight: bool):
+        super().__init__(shard_config)
         self.model_name = model_name
         self.model_weights = model_weights
-        self.is_first = is_first
-        self.is_last = is_last
         self.load_weight = load_weight
 
         self.operators_list = [ "LayerNorm + Attention",

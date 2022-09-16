@@ -9,6 +9,7 @@ import torch
 from torch import nn
 from transformers.models.deit.modeling_deit import DeiTEmbeddings
 from transformers.models.vit.modeling_vit import ViTLayer, ViTSelfAttention, ViTSelfOutput, ViTIntermediate, ViTOutput
+from .. import ModuleShardConfig
 from . import TransformerShard, TransformerShardData
 
 
@@ -44,8 +45,9 @@ class DeiTTransformerShard(TransformerShard):
     def __init__(self, stage: int, model_name: str, model_weights: Union[str, Mapping],
                  is_first: bool, is_last: bool, start_layer: int, end_layer: int,
                  load_weight: bool=True):
-        super().__init__(stage, model_name, model_weights, is_first, is_last, start_layer, end_layer,
-                         load_weight)
+        shard_config = ModuleShardConfig(stage=stage, layer_start=start_layer, layer_end=end_layer,
+                                         is_first=is_first, is_last=is_last)
+        super().__init__(shard_config, model_name, model_weights, load_weight)
         self.embeddings = None
         self.layernorm = None
         self.classifier = None
@@ -61,31 +63,31 @@ class DeiTTransformerShard(TransformerShard):
         else:
             self._make_layer(None)
 
-        logger.info("======= Finish Build DeiTTransformerShard%d ==========", self.stage)
+        logger.info("======= Finish Build DeiTTransformerShard%d ==========", self.shard_config.stage)
 
     def _make_layer(self, weights):
         ## first Shard
-        if self.is_first:
+        if self.shard_config.is_first:
             self.embeddings = DeiTEmbeddings(self.config)
             logger.debug(">>>> Load embeddings layer for the first shard")
             if self.load_weight:
                 self._load_layer_weights(weights, 0, None, load_first = True, load_last=False, load_kernel = False, kernel_id=None)
                 logger.debug(">>>> Load weights for embeddings layer")
 
-        current_layer_idx = self.start_layer
+        current_layer_idx = self.shard_config.layer_start
 
         ## first ununit part
-        if self.start_layer %4 != 1 or (self.start_layer+3 > self.end_layer):
+        if self.shard_config.layer_start %4 != 1 or (self.shard_config.layer_start+3 > self.shard_config.layer_end):
             logger.debug(">>>> For the first model part, load weight is %s:", self.load_weight)
-            for i in range(self.start_layer, min(self.end_layer, math.ceil(self.start_layer/4)*4)+1):
+            for i in range(self.shard_config.layer_start, min(self.shard_config.layer_end, math.ceil(self.shard_config.layer_start/4)*4)+1):
                 logger.debug("    Load the %d-th operation (%s) for %d-th vit layer",
                               i%4, self.operators_list[(i-1)%4], math.ceil(i/4)-1)
                 layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
                 self.first_ops.append(layer)
-            current_layer_idx = min(self.end_layer+1, math.ceil(self.start_layer/4)*4+1)
+            current_layer_idx = min(self.shard_config.layer_end+1, math.ceil(self.shard_config.layer_start/4)*4+1)
 
         ## mid unit part, the whole vit_layer
-        while current_layer_idx + 3 <= self.end_layer:
+        while current_layer_idx + 3 <= self.shard_config.layer_end:
             layer = ViTLayer(self.config)
             if self.load_weight:
                 layer = self._load_layer_weights(weights, math.ceil(current_layer_idx/4)-1, layer)
@@ -95,9 +97,9 @@ class DeiTTransformerShard(TransformerShard):
             current_layer_idx += 4
 
         ## last unit part
-        if self.end_layer >= current_layer_idx:
+        if self.shard_config.layer_end >= current_layer_idx:
             logger.debug(">>>> For the last model part, load weight is %s:", self.load_weight)
-        for i in range(current_layer_idx, self.end_layer+1):
+        for i in range(current_layer_idx, self.shard_config.layer_end+1):
             logger.debug("    Load the %d-th operation (%s) for %d-th vit layer",
                           i%4, self.operators_list[(i-1)%4], math.ceil(i/4)-1)
             layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
@@ -106,7 +108,7 @@ class DeiTTransformerShard(TransformerShard):
             self.last_ops.append(layer)
 
         ## last Shard
-        if self.is_last:
+        if self.shard_config.is_last:
             self.layernorm = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
             logger.debug(">>>> Load layernorm for the last shard")
             self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels) if self.config.num_labels > 0 else nn.Identity()
@@ -256,12 +258,12 @@ class DeiTTransformerShard(TransformerShard):
         start = time.time()
         x, skip = TransformerShard.parse_forward_data(data)
 
-        if self.is_first:
+        if self.shard_config.is_first:
             x = self.embeddings(x)
             skip = x
 
         for i, op in enumerate(self.first_ops):
-            x, skip = _forward_kernel(op, x, skip, (self.start_layer+i)%4)
+            x, skip = _forward_kernel(op, x, skip, (self.shard_config.layer_start+i)%4)
 
         for i, layer in enumerate(self.vit_layers):
             logger.debug("Before %d: %d MB", i, self.process.memory_info().rss / 1000000)
@@ -274,15 +276,15 @@ class DeiTTransformerShard(TransformerShard):
             # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with _load_layer_weights()
             x, skip = _forward_kernel(op, x, skip, (i+1)%4)
 
-        if self.is_last:
+        if self.shard_config.is_last:
             x = self.layernorm(x)
             x = self.classifier(x[:, 0, :])
         end = time.time()
 
-        logger.info("Shard%d: computed microbatch in: %f sec", self.stage, end - start)
-        logger.info("Shard%d: memory: %d MB", self.stage, self.process.memory_info().rss / 1000000)
+        logger.info("Shard%d: computed microbatch in: %f sec", self.shard_config.stage, end - start)
+        logger.info("Shard%d: memory: %d MB", self.shard_config.stage, self.process.memory_info().rss / 1000000)
 
-        if self.end_layer % 2 == 0:
+        if self.shard_config.layer_end % 2 == 0:
             return x
         return x, skip
 

@@ -9,6 +9,7 @@ import torch
 from torch import nn
 from transformers import AutoModel, BertForSequenceClassification
 from transformers.models.bert.modeling_bert import BertEmbeddings, BertPooler, BertSelfAttention, BertSelfOutput, BertIntermediate, BertOutput, BertLayer
+from .. import ModuleShardConfig
 from . import TransformerShard, TransformerShardData
 
 
@@ -35,8 +36,9 @@ class BertTransformerShard(TransformerShard):
     def __init__(self, stage: int, model_name: str, model_weights: Union[str, Mapping],
                  is_first: bool, is_last: bool, start_layer: int, end_layer: int,
                  load_weight: bool=True):
-        super().__init__(stage, model_name, model_weights, is_first, is_last, start_layer, end_layer,
-                         load_weight)
+        shard_config = ModuleShardConfig(stage=stage, layer_start=start_layer, layer_end=end_layer,
+                                         is_first=is_first, is_last=is_last)
+        super().__init__(shard_config, model_name, model_weights, load_weight)
         self.embeddings = None
 
         logger.debug(">>>> Model name: %s", model_name)
@@ -50,11 +52,11 @@ class BertTransformerShard(TransformerShard):
         else:
             self._make_layer(None)
 
-        logger.info("======= Finish Build BertTransformerShard%d ==========", self.stage)
+        logger.info("======= Finish Build BertTransformerShard%d ==========", self.shard_config.stage)
 
     def _make_layer(self, weights):
         ## first Shard
-        if self.is_first:
+        if self.shard_config.is_first:
             self.embeddings = BertEmbeddings(self.config)
             self.embeddings.eval()
             logger.debug(">>>> Load embeddings layer for the first shard")
@@ -62,21 +64,21 @@ class BertTransformerShard(TransformerShard):
                 self._load_layer_weights(weights, 0, None, load_first = True, load_last=False, load_kernel = False, kernel_id=None)
                 logger.debug(">>>> Load weights for embeddings layer")
 
-        current_layer_idx = self.start_layer
+        current_layer_idx = self.shard_config.layer_start
 
         ## first ununit part
-        if self.start_layer %4 != 1 or (self.start_layer+3 > self.end_layer):
+        if self.shard_config.layer_start %4 != 1 or (self.shard_config.layer_start+3 > self.shard_config.layer_end):
             logger.debug(">>>> For the first model part, load weight is %s:", self.load_weight)
-            for i in range(self.start_layer, min(self.end_layer, math.ceil(self.start_layer/4)*4)+1):
+            for i in range(self.shard_config.layer_start, min(self.shard_config.layer_end, math.ceil(self.shard_config.layer_start/4)*4)+1):
                 logger.debug("    Load the %d-th operation (%s) for %d-th vit layer",
                               i%4, self.operators_list[(i-1)%4], math.ceil(i/4)-1)
                 layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
                 layer.eval()
                 self.first_ops.append(layer)
-            current_layer_idx = min(self.end_layer+1, math.ceil(self.start_layer/4)*4+1)
+            current_layer_idx = min(self.shard_config.layer_end+1, math.ceil(self.shard_config.layer_start/4)*4+1)
 
         ## mid unit part, the whole vit_layer
-        while current_layer_idx + 3 <= self.end_layer:
+        while current_layer_idx + 3 <= self.shard_config.layer_end:
             with torch.no_grad():
                 layer = BertLayer(self.config)
             if self.load_weight:
@@ -88,9 +90,9 @@ class BertTransformerShard(TransformerShard):
             current_layer_idx += 4
 
         ## last unit part
-        if self.end_layer >= current_layer_idx:
+        if self.shard_config.layer_end >= current_layer_idx:
             logger.debug(">>>> For the last model part, load weight is %s:", self.load_weight)
-        for i in range(current_layer_idx, self.end_layer+1):
+        for i in range(current_layer_idx, self.shard_config.layer_end+1):
             logger.debug("    Load the %d-th operation (%s) for %d-th vit layer",
                           i%4, self.operators_list[(i-1)%4], math.ceil(i/4)-1)
             layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1, self.load_weight)
@@ -100,7 +102,7 @@ class BertTransformerShard(TransformerShard):
             self.last_ops.append(layer)
 
         ## last Shard
-        if self.is_last:
+        if self.shard_config.is_last:
             self.bertpooler = BertPooler(self.config)
             self.bertpooler.eval()
             if self.load_weight:
@@ -244,12 +246,12 @@ class BertTransformerShard(TransformerShard):
         start = time.time()
         x, skip = TransformerShard.parse_forward_data(data)
 
-        if self.is_first:
+        if self.shard_config.is_first:
             x = self.embeddings(x)
             skip = x
 
         for i, op in enumerate(self.first_ops):
-            x, skip = _forward_kernel(op, x, skip, (self.start_layer+i)%4)
+            x, skip = _forward_kernel(op, x, skip, (self.shard_config.layer_start+i)%4)
 
         for layer in self.vit_layers:
             with torch.no_grad():
@@ -260,14 +262,14 @@ class BertTransformerShard(TransformerShard):
             # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with _load_layer_weights()
             x, skip = _forward_kernel(op, x, skip, (i+1)%4)
 
-        if self.is_last:
+        if self.shard_config.is_last:
             x = self.bertpooler(x)
         end = time.time()
 
-        logger.info("Shard%d: computed microbatch in: %f sec", self.stage, end - start)
-        logger.info("Shard%d: memory: %d MB", self.stage, self.process.memory_info().rss / 1000000)
+        logger.info("Shard%d: computed microbatch in: %f sec", self.shard_config.stage, end - start)
+        logger.info("Shard%d: memory: %d MB", self.shard_config.stage, self.process.memory_info().rss / 1000000)
 
-        if self.end_layer % 2 == 0:
+        if self.shard_config.layer_end % 2 == 0:
             return x
         return x, skip
 
@@ -288,8 +290,9 @@ class BertTransformerShardForSequenceClassification(TransformerShard):
     def __init__(self, stage: int, model_name: str, model_weights: Union[str, Mapping],
                  is_first: bool, is_last: bool, start_layer: int, end_layer: int,
                  load_weight: bool=True):
-        super().__init__(stage, model_name, model_weights, is_first, is_last, start_layer, end_layer,
-                         load_weight)
+        shard_config = ModuleShardConfig(stage=stage, layer_start=start_layer, layer_end=end_layer,
+                                         is_first=is_first, is_last=is_last)
+        super().__init__(shard_config, model_name, model_weights, load_weight)
         self.bert = None
         self.classifier = None
 
@@ -305,7 +308,7 @@ class BertTransformerShardForSequenceClassification(TransformerShard):
             self._make_layer(None)
         logger.info(
             "======= Finish Build BertTransformerShardForSequenceClassification%d ==========",
-            self.stage)
+            self.shard_config.stage)
 
     def _make_layer(self, weights):
         # All stages do something with self.bert
@@ -315,11 +318,12 @@ class BertTransformerShardForSequenceClassification(TransformerShard):
             for key, val in weights.items():
                 if key.startswith('bert.'):
                     bert_weights[key[len('bert.'):]] = val
-        self.bert = BertTransformerShard(self.stage, self.model_name, bert_weights, self.is_first,
-                                         self.is_last, self.start_layer, self.end_layer,
+        self.bert = BertTransformerShard(self.shard_config.stage, self.model_name, bert_weights,
+                                         self.shard_config.is_first, self.shard_config.is_last,
+                                         self.shard_config.layer_start, self.shard_config.layer_end,
                                          self.load_weight)
 
-        if self.is_last:
+        if self.shard_config.is_last:
             self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels)
             if self.load_weight:
                 with torch.no_grad():
@@ -330,7 +334,7 @@ class BertTransformerShardForSequenceClassification(TransformerShard):
     def forward(self, data: TransformerShardData) -> TransformerShardData:
         """Compute shard layers."""
         data = self.bert(data)
-        if self.is_last:
+        if self.shard_config.is_last:
             data = self.classifier(data)
         return data
 

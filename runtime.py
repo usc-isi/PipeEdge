@@ -50,7 +50,7 @@ def forward_hook_monitor(module, _inputs, outputs) -> None:
     # Measure work as the microbatch size
     n_items = models.get_microbatch_size(outputs, verify=True)
     # Measure accuracy as the number of layers processed
-    n_layers = module.end_layer - module.start_layer + 1
+    n_layers = module.shard_config.layer_end - module.shard_config.layer_start + 1
     monitoring.iteration(MONITORING_KEY_MODEL, work=n_items, accuracy=n_layers)
 
 def forward_pre_hook_quant_decode_start(_module, _inputs) -> None:
