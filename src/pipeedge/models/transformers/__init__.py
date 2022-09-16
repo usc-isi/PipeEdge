@@ -15,11 +15,10 @@ class TransformerShard(ModuleShard):
     # pylint: disable=abstract-method
 
     def __init__(self, shard_config: ModuleShardConfig, model_name: str,
-                 model_weights: Union[str, Mapping], load_weight: bool):
+                 model_weights: Union[str, Mapping]):
         super().__init__(shard_config)
         self.model_name = model_name
         self.model_weights = model_weights
-        self.load_weight = load_weight
 
         self.process = psutil.Process(os.getpid())
         self.config = AutoConfig.from_pretrained(model_name)

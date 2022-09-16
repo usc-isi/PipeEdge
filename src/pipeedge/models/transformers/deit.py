@@ -43,22 +43,19 @@ class DeiTTransformerShard(TransformerShard):
     """DeiT transformer shard."""
 
     def __init__(self, shard_config: ModuleShardConfig, model_name: str,
-                 model_weights: Union[str, Mapping], load_weight: bool=True):
-        super().__init__(shard_config, model_name, model_weights, load_weight)
+                 model_weights: Union[str, Mapping]):
+        super().__init__(shard_config, model_name, model_weights)
         self.embeddings = None
         self.layernorm = None
         self.classifier = None
 
         logger.debug(">>>> Model name: %s", model_name)
-        if self.load_weight:
-            if isinstance(model_weights, str):
-                logger.debug(">>>> Load weight file: %s", self.model_weights)
-                with np.load(self.model_weights) as weights:
-                    self._build_shard(weights)
-            else:
-                self._build_shard(model_weights)
+        if isinstance(model_weights, str):
+            logger.debug(">>>> Load weight file: %s", self.model_weights)
+            with np.load(self.model_weights) as weights:
+                self._build_shard(weights)
         else:
-            self._build_shard(None)
+            self._build_shard(model_weights)
 
         logger.info("======= Finish Build DeiTTransformerShard%d ==========", self.shard_config.stage)
 
@@ -67,8 +64,7 @@ class DeiTTransformerShard(TransformerShard):
         if self.shard_config.is_first:
             self.embeddings = DeiTEmbeddings(self.config)
             logger.debug(">>>> Load embeddings layer for the first shard")
-            if self.load_weight:
-                self._load_layer_weights(weights, 0, None, load_first=True)
+            self._load_layer_weights(weights, 0, None, load_first=True)
 
         current_layer_idx = self.shard_config.layer_start
 
@@ -83,8 +79,7 @@ class DeiTTransformerShard(TransformerShard):
         ## whole model layers
         while current_layer_idx + 3 <= self.shard_config.layer_end:
             layer = ViTLayer(self.config)
-            if self.load_weight:
-                self._load_layer_weights(weights, math.ceil(current_layer_idx/4)-1, layer)
+            self._load_layer_weights(weights, math.ceil(current_layer_idx/4)-1, layer)
             self.model_layers.append(layer)
             logger.debug(">>>> Load the %d-th layer", math.ceil(current_layer_idx/4)-1)
             current_layer_idx += 4
@@ -93,8 +88,7 @@ class DeiTTransformerShard(TransformerShard):
         for i in range(current_layer_idx, self.shard_config.layer_end+1):
             logger.debug("    Load the %d-th operation for %d-th layer", i%4, math.ceil(i/4)-1)
             layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1)
-            if self.load_weight:
-                self._load_layer_weights(weights, math.ceil(i/4)-1, layer, kernel_id=i%4)
+            self._load_layer_weights(weights, math.ceil(i/4)-1, layer, kernel_id=i%4)
             self.last_ops.append(layer)
 
         ## last Shard
@@ -103,8 +97,7 @@ class DeiTTransformerShard(TransformerShard):
             logger.debug(">>>> Load layernorm for the last shard")
             self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels) if self.config.num_labels > 0 else nn.Identity()
             logger.debug(">>>> Load classifier for the last shard")
-            if self.load_weight:
-                self._load_layer_weights(weights, 0, None, load_last=True)
+            self._load_layer_weights(weights, 0, None, load_last=True)
 
     def _build_kernel(self, weights, kernel_id, model_layer_id):
         layers = nn.ModuleList()
@@ -118,8 +111,7 @@ class DeiTTransformerShard(TransformerShard):
             layers.append( ViTIntermediate(self.config))
         else:
             layers.append(ViTOutput(self.config))
-        if self.load_weight:
-            self._load_layer_weights(weights, model_layer_id, layers, kernel_id=kernel_id)
+        self._load_layer_weights(weights, model_layer_id, layers, kernel_id=kernel_id)
         return layers
 
     def _load_layer_weights(self, weights, model_layer_id, transformer_layer,
