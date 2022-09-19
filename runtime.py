@@ -323,7 +323,7 @@ def load_dataset(dataset_cfg: dict, model_name: str, batch_size: int, ubatch_siz
         feature_extractor = _get_feature_extractor(model_name)
         ## random data
         # image = torch.randn(3, 384, 384)
-        image = Image.open(requests.get(IMG_URL, stream=True).raw)
+        image = Image.open(requests.get(IMG_URL, stream=True, timeout=60).raw)
         inputs = feature_extractor(images=[image], return_tensors="pt")['pixel_values']
         dataset = data.RolloverTensorDataset(batch_size, inputs, torch.tensor([IMG_LABEL_IDX]))
     return dataset
