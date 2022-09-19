@@ -1,8 +1,6 @@
 """Transformers module."""
 from collections.abc import Mapping
-import os
 from typing import Tuple, Type, Union
-import psutil
 from torch import nn, Tensor
 from transformers import AutoConfig
 from .. import ModuleShard, ModuleShardConfig
@@ -20,7 +18,6 @@ class TransformerShard(ModuleShard):
         self.model_name = model_name
         self.model_weights = model_weights
 
-        self.process = psutil.Process(os.getpid())
         self.config = AutoConfig.from_pretrained(model_name)
 
         ## operations/transformer layers set

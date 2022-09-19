@@ -172,7 +172,6 @@ class BertTransformerShard(TransformerShard):
                     model_layer.output.dense.bias.copy_(dense_bias)
                     model_layer.output.LayerNorm.weight.copy_(layernorm_weight)
                     model_layer.output.LayerNorm.bias.copy_(layernorm_bias)
-                    logger.debug("memory %d MB", self.process.memory_info().rss // 1000000)
                 elif kernel_id == 1:
                     query_weight = torch.from_numpy(weights[ROOT + ATTENTION_Q + WEIGHT])
                     key_weight = torch.from_numpy(weights[ROOT + ATTENTION_K + WEIGHT])
@@ -237,7 +236,6 @@ class BertTransformerShard(TransformerShard):
         end = time.time()
 
         logger.info("Shard%d: computed microbatch in: %f sec", self.shard_config.stage, end - start)
-        logger.info("Shard%d: memory: %d MB", self.shard_config.stage, self.process.memory_info().rss / 1000000)
 
         if self.shard_config.layer_end % 2 == 0:
             return x

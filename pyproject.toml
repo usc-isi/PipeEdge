@@ -14,7 +14,6 @@ dependencies = [
     "apphb>=0.1.0",
     "energymon>=0.1.0",
     "numpy>=1.15.0",
-    "psutil",
     "PyYAML",
     "requests",
     "timm>=0.3.2",
@@ -27,6 +26,7 @@ dependencies = [
 runtime = [
     "datasets>=2.0.0",
     "Pillow",
+    "psutil",
     "scipy",
     "torchvision>=0.3.0",
 ]

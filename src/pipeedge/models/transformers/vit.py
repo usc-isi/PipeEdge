@@ -187,7 +187,6 @@ class ViTTransformerShard(TransformerShard):
                     model_layer.layernorm_before.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_NORM, "bias")]))
                     model_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "scale")]))
                     model_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[os.path.join(ROOT, MLP_NORM, "bias")]))
-                    logger.debug("memory %d MB", self.process.memory_info().rss // 1000000)
                 elif kernel_id == 1:
                     query_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_Q, "kernel")]).view(hidden_size, hidden_size).t()
                     key_weight = torch.from_numpy(weights[os.path.join(ROOT, ATTENTION_K, "kernel")]).view(hidden_size, hidden_size).t()
@@ -227,7 +226,6 @@ class ViTTransformerShard(TransformerShard):
     @torch.no_grad()
     def forward(self, data: TransformerShardData) -> TransformerShardData:
         """Compute shard layers."""
-        logger.debug("Start memory %d MB", self.process.memory_info().rss / 1000000)
         start = time.time()
         x, skip = TransformerShard.parse_forward_data(data)
 
@@ -239,11 +237,8 @@ class ViTTransformerShard(TransformerShard):
             x, skip = _forward_kernel(op, x, skip, (self.shard_config.layer_start+i)%4)
 
         for i, layer in enumerate(self.model_layers):
-            logger.debug("Before %d: %d MB", i, self.process.memory_info().rss / 1000000)
             x = layer(x)[0]
-            logger.debug("After %d: %d MB", i, self.process.memory_info().rss / 1000000)
             skip = x
-        logger.debug("vit-layer memory %d MB", self.process.memory_info().rss / 1000000)
 
         for i, op in enumerate(self.last_ops):
             # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with _load_layer_weights()
@@ -255,7 +250,6 @@ class ViTTransformerShard(TransformerShard):
         end = time.time()
 
         logger.info("Shard%d: computed microbatch in: %f sec", self.shard_config.stage, end - start)
-        logger.info("Shard%d: memory: %d MB", self.shard_config.stage, self.process.memory_info().rss / 1000000)
 
         if self.shard_config.layer_end % 2 == 0:
             return x
