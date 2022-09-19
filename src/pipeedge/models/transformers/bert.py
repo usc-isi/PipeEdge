@@ -81,7 +81,6 @@ class BertTransformerShard(TransformerShard):
         for i in range(current_layer_idx, self.shard_config.layer_end+1):
             logger.debug("    Load the %d-th operation for %d-th layer", i%4, math.ceil(i/4)-1)
             layer = self._build_kernel(weights, i%4, math.ceil(i/4)-1)
-            self._load_layer_weights(weights, model_layer_id=math.ceil(i/4)-1, model_layer=layer, kernel_id=i%4)
             layer.eval()
             self.last_ops.append(layer)
 
