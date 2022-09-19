@@ -115,15 +115,6 @@ class DeiTTransformerShard(TransformerShard):
 
     def _load_layer_weights(self, weights, model_layer_id=0, model_layer=None,
                             load_first=False, load_last=False, kernel_id=None):
-        ROOT = f"blocks.{model_layer_id}."
-        ATTENTION_QKV = "attn.qkv."
-        ATTENTION_OUT = "attn.proj."
-        FC_0 = "mlp.fc1."
-        FC_1 = "mlp.fc2."
-        ATTENTION_NORM = "norm1."
-        MLP_NORM = "norm2."
-        embed_dim = self.config.hidden_size
-
         if load_first:
             with torch.no_grad():
                 self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["pos_embed"])))
@@ -138,21 +129,27 @@ class DeiTTransformerShard(TransformerShard):
                 self.classifier.bias.copy_(torch.from_numpy(weights["head.bias"]))
 
         if model_layer is not None:
+            root = f"blocks.{model_layer_id}."
+            attention_qkv = root + "attn.qkv."
+            attention_out = root + "attn.proj."
+            fc_0 = root + "mlp.fc1."
+            fc_1 = root + "mlp.fc2."
+            attention_norm = root + "norm1."
+            mlp_norm = root + "norm2."
+            embed_dim = self.config.hidden_size
             with torch.no_grad():
                 if kernel_id is None:
-                    qkv_f = str(ROOT + ATTENTION_QKV + "weight")
-                    qkv_weight = weights[qkv_f]
+                    qkv_weight = weights[attention_qkv + "weight"]
                     query_weight = torch.from_numpy(qkv_weight[0:embed_dim,:])
                     key_weight = torch.from_numpy(qkv_weight[embed_dim:embed_dim*2,:])
                     value_weight = torch.from_numpy(qkv_weight[embed_dim*2:embed_dim*3,:])
-                    out_weight = torch.from_numpy(weights[ROOT + ATTENTION_OUT + "weight"])
+                    out_weight = torch.from_numpy(weights[attention_out + "weight"])
 
-                    qkv_b = str(ROOT + ATTENTION_QKV + "bias")
-                    qkv_bias = weights[qkv_b]
+                    qkv_bias = weights[attention_qkv + "bias"]
                     query_bias = torch.from_numpy(qkv_bias[0:embed_dim])
                     key_bias = torch.from_numpy(qkv_bias[embed_dim:embed_dim*2])
                     value_bias= torch.from_numpy(qkv_bias[embed_dim*2:embed_dim*3])
-                    out_bias = torch.from_numpy(weights[ROOT + ATTENTION_OUT + "bias"])
+                    out_bias = torch.from_numpy(weights[attention_out + "bias"])
 
                     model_layer.attention.attention.query.weight.copy_(query_weight)
                     model_layer.attention.attention.key.weight.copy_(key_weight)
@@ -164,35 +161,33 @@ class DeiTTransformerShard(TransformerShard):
                     model_layer.attention.attention.value.bias.copy_(value_bias)
                     model_layer.attention.output.dense.bias.copy_(out_bias)
 
-                    mlp_weight_0 = torch.from_numpy(weights[ROOT + FC_0 + "weight"])
-                    mlp_weight_1 = torch.from_numpy(weights[ROOT + FC_1 + "weight"])
-                    mlp_bias_0 = torch.from_numpy(weights[ROOT + FC_0 + "bias"])
-                    mlp_bias_1 = torch.from_numpy(weights[ROOT + FC_1 + "bias"])
+                    mlp_weight_0 = torch.from_numpy(weights[fc_0 + "weight"])
+                    mlp_weight_1 = torch.from_numpy(weights[fc_1 + "weight"])
+                    mlp_bias_0 = torch.from_numpy(weights[fc_0 + "bias"])
+                    mlp_bias_1 = torch.from_numpy(weights[fc_1 + "bias"])
 
                     model_layer.intermediate.dense.weight.copy_(mlp_weight_0)
                     model_layer.intermediate.dense.bias.copy_(mlp_bias_0)
                     model_layer.output.dense.weight.copy_(mlp_weight_1)
                     model_layer.output.dense.bias.copy_(mlp_bias_1)
 
-                    model_layer.layernorm_before.weight.copy_(torch.from_numpy(weights[ROOT +  ATTENTION_NORM + "weight"]))
-                    model_layer.layernorm_before.bias.copy_(torch.from_numpy(weights[ROOT + ATTENTION_NORM + "bias"]))
-                    model_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[ROOT + MLP_NORM + "weight"]))
-                    model_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[ROOT + MLP_NORM + "bias"]))
+                    model_layer.layernorm_before.weight.copy_(torch.from_numpy(weights[attention_norm + "weight"]))
+                    model_layer.layernorm_before.bias.copy_(torch.from_numpy(weights[attention_norm + "bias"]))
+                    model_layer.layernorm_after.weight.copy_(torch.from_numpy(weights[mlp_norm + "weight"]))
+                    model_layer.layernorm_after.bias.copy_(torch.from_numpy(weights[mlp_norm + "bias"]))
                 elif kernel_id == 1:
-                    qkv_f = str(ROOT + ATTENTION_QKV + "weight")
-                    qkv_weight = weights[qkv_f]
+                    qkv_weight = weights[attention_qkv + "weight"]
                     query_weight = torch.from_numpy(qkv_weight[0:embed_dim,:])
                     key_weight = torch.from_numpy(qkv_weight[embed_dim:embed_dim*2,:])
                     value_weight = torch.from_numpy(qkv_weight[embed_dim*2:embed_dim*3,:])
 
-                    qkv_b = str(ROOT + ATTENTION_QKV + "bias")
-                    qkv_bias = weights[qkv_b]
+                    qkv_bias = weights[attention_qkv + "bias"]
                     query_bias = torch.from_numpy(qkv_bias[0:embed_dim,])
                     key_bias = torch.from_numpy(qkv_bias[embed_dim:embed_dim*2])
                     value_bias= torch.from_numpy(qkv_bias[embed_dim*2:embed_dim*3])
 
-                    model_layer[0].weight.copy_(torch.from_numpy(weights[ROOT +  ATTENTION_NORM + "weight"]))
-                    model_layer[0].bias.copy_(torch.from_numpy(weights[ROOT +  ATTENTION_NORM + "bias"]))
+                    model_layer[0].weight.copy_(torch.from_numpy(weights[attention_norm + "weight"]))
+                    model_layer[0].bias.copy_(torch.from_numpy(weights[attention_norm + "bias"]))
                     model_layer[1].query.weight.copy_(query_weight)
                     model_layer[1].key.weight.copy_(key_weight)
                     model_layer[1].value.weight.copy_(value_weight)
@@ -201,20 +196,20 @@ class DeiTTransformerShard(TransformerShard):
                     model_layer[1].key.bias.copy_(key_bias)
                     model_layer[1].value.bias.copy_(value_bias)
                 elif kernel_id == 2:
-                    out_weight = torch.from_numpy(weights[ROOT + ATTENTION_OUT + "weight"])
-                    out_bias = torch.from_numpy(weights[ROOT + ATTENTION_OUT + "bias"])
+                    out_weight = torch.from_numpy(weights[attention_out + "weight"])
+                    out_bias = torch.from_numpy(weights[attention_out + "bias"])
                     model_layer[0].dense.weight.copy_(out_weight)
                     model_layer[0].dense.bias.copy_(out_bias)
                 elif kernel_id == 3:
-                    model_layer[0].weight.copy_(torch.from_numpy(weights[ROOT + MLP_NORM + "weight"]))
-                    model_layer[0].bias.copy_(torch.from_numpy(weights[ROOT + MLP_NORM + "bias"]))
-                    mlp_weight_0 = torch.from_numpy(weights[ROOT + FC_0 + "weight"])
-                    mlp_bias_0 = torch.from_numpy(weights[ROOT + FC_0 + "bias"])
+                    model_layer[0].weight.copy_(torch.from_numpy(weights[mlp_norm + "weight"]))
+                    model_layer[0].bias.copy_(torch.from_numpy(weights[mlp_norm + "bias"]))
+                    mlp_weight_0 = torch.from_numpy(weights[fc_0 + "weight"])
+                    mlp_bias_0 = torch.from_numpy(weights[fc_0 + "bias"])
                     model_layer[1].dense.weight.copy_(mlp_weight_0)
                     model_layer[1].dense.bias.copy_(mlp_bias_0)
                 elif kernel_id == 0:
-                    mlp_weight_1 = torch.from_numpy(weights[ROOT + FC_1 + "weight"])
-                    mlp_bias_1 = torch.from_numpy(weights[ROOT + FC_1 + "bias"])
+                    mlp_weight_1 = torch.from_numpy(weights[fc_1 + "weight"])
+                    mlp_bias_1 = torch.from_numpy(weights[fc_1 + "bias"])
                     model_layer[0].dense.weight.copy_(mlp_weight_1)
                     model_layer[0].dense.bias.copy_(mlp_bias_1)
 
