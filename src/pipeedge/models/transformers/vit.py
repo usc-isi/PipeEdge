@@ -256,12 +256,13 @@ class ViTTransformerShard(TransformerShard):
         return x, skip
 
     @staticmethod
-    def save_weights(model_name: str, model_file: str, url: Optional[str]=None) -> None:
+    def save_weights(model_name: str, model_file: str, url: Optional[str]=None,
+                     timeout_sec: Optional[float]=None) -> None:
         """Save the model weights file."""
         if url is None:
             url = _WEIGHTS_URLS[model_name]
         logger.info('Downloading model: %s: %s', model_name, url)
-        req = requests.get(url, stream=True)
+        req = requests.get(url, stream=True, timeout=timeout_sec)
         req.raise_for_status()
         with open(model_file, 'wb') as file:
             for chunk in req.iter_content(chunk_size=8192):
