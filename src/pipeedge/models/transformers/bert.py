@@ -51,10 +51,10 @@ class BertTransformerShard(TransformerShard):
     def _build_shard(self, weights):
         ## first Shard
         if self.shard_config.is_first:
+            logger.debug(">>>> Load embeddings layer for the first shard")
             self.embeddings = BertEmbeddings(self.config)
             self.embeddings.eval()
-            logger.debug(">>>> Load embeddings layer for the first shard")
-            self._load_layer_weights(weights, load_first=True)
+            self._load_weights_first(weights)
 
         current_layer_idx = self.shard_config.layer_start
 
@@ -69,12 +69,12 @@ class BertTransformerShard(TransformerShard):
 
         ## whole model layers
         while current_layer_idx + 3 <= self.shard_config.layer_end:
+            logger.debug(">>>> Load the %d-th layer", math.ceil(current_layer_idx/4)-1)
             with torch.no_grad():
                 layer = BertLayer(self.config)
-            self._load_layer_weights(weights, model_layer_id=math.ceil(current_layer_idx/4)-1, model_layer=layer)
+            self._load_weights_layer(weights, math.ceil(current_layer_idx/4)-1, layer)
             layer.eval()
             self.model_layers.append(layer)
-            logger.debug(">>>> Load the %d-th layer", math.ceil(current_layer_idx/4)-1)
             current_layer_idx += 4
 
         ## partial model layer after whole model layers
@@ -86,10 +86,10 @@ class BertTransformerShard(TransformerShard):
 
         ## last Shard
         if self.shard_config.is_last:
+            logger.debug(">>>> Load pooler for the last shard")
             self.bertpooler = BertPooler(self.config)
             self.bertpooler.eval()
-            logger.debug(">>>> Load pooler for the last shard")
-            self._load_layer_weights(weights, load_last=True)
+            self._load_weights_last(weights)
 
     def _build_kernel(self, weights, kernel_id, model_layer_id):
         layers = nn.ModuleList()
@@ -101,110 +101,108 @@ class BertTransformerShard(TransformerShard):
             layers.append(BertIntermediate(self.config))
         else:
             layers.append(BertOutput(self.config))
-        self._load_layer_weights(weights, model_layer_id=model_layer_id, model_layer=layers, kernel_id=kernel_id)
+        self._load_weights_layer(weights, model_layer_id, layers, kernel_id=kernel_id)
         return layers
 
-    def _load_layer_weights(self, weights, model_layer_id=0, model_layer=None,
-                            load_first=False, load_last=False, kernel_id=None):
-        if load_first:
-            with torch.no_grad():
-                self.embeddings.position_ids.copy_(torch.from_numpy((weights["embeddings.position_ids"])))
-                self.embeddings.word_embeddings.weight.copy_(torch.from_numpy(weights['embeddings.word_embeddings.weight']))
-                self.embeddings.position_embeddings.weight.copy_(torch.from_numpy(weights['embeddings.position_embeddings.weight']))
-                self.embeddings.token_type_embeddings.weight.copy_(torch.from_numpy(weights['embeddings.token_type_embeddings.weight']))
-                self.embeddings.LayerNorm.weight.copy_(torch.from_numpy(weights['embeddings.LayerNorm.weight']))
-                self.embeddings.LayerNorm.bias.copy_(torch.from_numpy(weights['embeddings.LayerNorm.bias']))
+    @torch.no_grad()
+    def _load_weights_first(self, weights):
+        self.embeddings.position_ids.copy_(torch.from_numpy((weights["embeddings.position_ids"])))
+        self.embeddings.word_embeddings.weight.copy_(torch.from_numpy(weights['embeddings.word_embeddings.weight']))
+        self.embeddings.position_embeddings.weight.copy_(torch.from_numpy(weights['embeddings.position_embeddings.weight']))
+        self.embeddings.token_type_embeddings.weight.copy_(torch.from_numpy(weights['embeddings.token_type_embeddings.weight']))
+        self.embeddings.LayerNorm.weight.copy_(torch.from_numpy(weights['embeddings.LayerNorm.weight']))
+        self.embeddings.LayerNorm.bias.copy_(torch.from_numpy(weights['embeddings.LayerNorm.bias']))
 
-        if load_last:
-            with torch.no_grad():
-                self.bertpooler.dense.weight.copy_(torch.from_numpy(weights["pooler.dense.weight"]))
-                self.bertpooler.dense.bias.copy_(torch.from_numpy(weights['pooler.dense.bias']))
+    @torch.no_grad()
+    def _load_weights_last(self, weights):
+        self.bertpooler.dense.weight.copy_(torch.from_numpy(weights["pooler.dense.weight"]))
+        self.bertpooler.dense.bias.copy_(torch.from_numpy(weights['pooler.dense.bias']))
 
-        if model_layer is not None:
-            root = f"encoder.layer.{model_layer_id}."
-            attention_q = root + "attention.self.query."
-            attention_k = root + "attention.self.key."
-            attention_v = root + "attention.self.value."
-            attention_out_dense = root + "attention.output.dense."
-            attention_out_layernorm = root + "attention.output.LayerNorm."
-            intermediate = root + "intermediate.dense."
-            output_dense = root + "output.dense."
-            output_layer = root + "output.LayerNorm."
-            with torch.no_grad():
-                if kernel_id is None:
-                    query_weight = torch.from_numpy(weights[attention_q + "weight"])
-                    key_weight = torch.from_numpy(weights[attention_k + "weight"])
-                    value_weight = torch.from_numpy(weights[attention_v + "weight"])
-                    out_dense_weight = torch.from_numpy(weights[attention_out_dense + "weight"])
-                    output_layernorm_weight = torch.from_numpy(weights[attention_out_layernorm + "weight"])
-                    intermediate_dense_weight = torch.from_numpy(weights[intermediate + "weight"])
-                    dense_weight = torch.from_numpy(weights[output_dense + "weight"])
-                    layernorm_weight = torch.from_numpy(weights[output_layer + "weight"])
+    @torch.no_grad()
+    def _load_weights_layer(self, weights, model_layer_id, model_layer, kernel_id=None):
+        root = f"encoder.layer.{model_layer_id}."
+        attention_q = root + "attention.self.query."
+        attention_k = root + "attention.self.key."
+        attention_v = root + "attention.self.value."
+        attention_out_dense = root + "attention.output.dense."
+        attention_out_layernorm = root + "attention.output.LayerNorm."
+        intermediate = root + "intermediate.dense."
+        output_dense = root + "output.dense."
+        output_layer = root + "output.LayerNorm."
+        if kernel_id is None:
+            query_weight = torch.from_numpy(weights[attention_q + "weight"])
+            key_weight = torch.from_numpy(weights[attention_k + "weight"])
+            value_weight = torch.from_numpy(weights[attention_v + "weight"])
+            out_dense_weight = torch.from_numpy(weights[attention_out_dense + "weight"])
+            output_layernorm_weight = torch.from_numpy(weights[attention_out_layernorm + "weight"])
+            intermediate_dense_weight = torch.from_numpy(weights[intermediate + "weight"])
+            dense_weight = torch.from_numpy(weights[output_dense + "weight"])
+            layernorm_weight = torch.from_numpy(weights[output_layer + "weight"])
 
-                    query_bias = torch.from_numpy(weights[attention_q + "bias"])
-                    key_bias = torch.from_numpy(weights[attention_k + "bias"])
-                    value_bias = torch.from_numpy(weights[attention_v + "bias"])
-                    out_dense_bias = torch.from_numpy(weights[attention_out_dense + "bias"])
-                    output_layernorm_bias = torch.from_numpy(weights[attention_out_layernorm + "bias"])
-                    intermediate_dense_bias = torch.from_numpy(weights[intermediate + "bias"])
-                    dense_bias = torch.from_numpy(weights[output_dense + "bias"])
-                    layernorm_bias = torch.from_numpy(weights[output_layer + "bias"])
+            query_bias = torch.from_numpy(weights[attention_q + "bias"])
+            key_bias = torch.from_numpy(weights[attention_k + "bias"])
+            value_bias = torch.from_numpy(weights[attention_v + "bias"])
+            out_dense_bias = torch.from_numpy(weights[attention_out_dense + "bias"])
+            output_layernorm_bias = torch.from_numpy(weights[attention_out_layernorm + "bias"])
+            intermediate_dense_bias = torch.from_numpy(weights[intermediate + "bias"])
+            dense_bias = torch.from_numpy(weights[output_dense + "bias"])
+            layernorm_bias = torch.from_numpy(weights[output_layer + "bias"])
 
-                    model_layer.attention.self.query.weight.copy_(query_weight)
-                    model_layer.attention.self.key.weight.copy_(key_weight)
-                    model_layer.attention.self.value.weight.copy_(value_weight)
-                    model_layer.attention.output.dense.weight.copy_(out_dense_weight)
-                    model_layer.attention.output.LayerNorm.weight.copy_(output_layernorm_weight)
+            model_layer.attention.self.query.weight.copy_(query_weight)
+            model_layer.attention.self.key.weight.copy_(key_weight)
+            model_layer.attention.self.value.weight.copy_(value_weight)
+            model_layer.attention.output.dense.weight.copy_(out_dense_weight)
+            model_layer.attention.output.LayerNorm.weight.copy_(output_layernorm_weight)
 
-                    model_layer.attention.self.query.bias.copy_(query_bias)
-                    model_layer.attention.self.key.bias.copy_(key_bias)
-                    model_layer.attention.self.value.bias.copy_(value_bias)
-                    model_layer.attention.output.dense.bias.copy_(out_dense_bias)
-                    model_layer.attention.output.LayerNorm.bias.copy_(output_layernorm_bias)
+            model_layer.attention.self.query.bias.copy_(query_bias)
+            model_layer.attention.self.key.bias.copy_(key_bias)
+            model_layer.attention.self.value.bias.copy_(value_bias)
+            model_layer.attention.output.dense.bias.copy_(out_dense_bias)
+            model_layer.attention.output.LayerNorm.bias.copy_(output_layernorm_bias)
 
-                    model_layer.intermediate.dense.weight.copy_(intermediate_dense_weight)
-                    model_layer.intermediate.dense.bias.copy_(intermediate_dense_bias)
+            model_layer.intermediate.dense.weight.copy_(intermediate_dense_weight)
+            model_layer.intermediate.dense.bias.copy_(intermediate_dense_bias)
 
-                    model_layer.output.dense.weight.copy_(dense_weight)
-                    model_layer.output.dense.bias.copy_(dense_bias)
-                    model_layer.output.LayerNorm.weight.copy_(layernorm_weight)
-                    model_layer.output.LayerNorm.bias.copy_(layernorm_bias)
-                elif kernel_id == 1:
-                    query_weight = torch.from_numpy(weights[attention_q + "weight"])
-                    key_weight = torch.from_numpy(weights[attention_k + "weight"])
-                    value_weight = torch.from_numpy(weights[attention_v + "weight"])
-                    query_bias = torch.from_numpy(weights[attention_q + "bias"])
-                    key_bias = torch.from_numpy(weights[attention_k + "bias"])
-                    value_bias = torch.from_numpy(weights[attention_v + "bias"])
-                    model_layer[0].query.weight.copy_(query_weight)
-                    model_layer[0].key.weight.copy_(key_weight)
-                    model_layer[0].value.weight.copy_(value_weight)
-                    model_layer[0].query.bias.copy_(query_bias)
-                    model_layer[0].key.bias.copy_(key_bias)
-                    model_layer[0].value.bias.copy_(value_bias)
-                elif kernel_id == 2:
-                    out_dense_weight = torch.from_numpy(weights[attention_out_dense + "weight"])
-                    output_layernorm_weight = torch.from_numpy(weights[attention_out_layernorm + "weight"])
-                    out_dense_bias = torch.from_numpy(weights[attention_out_dense + "bias"])
-                    output_layernorm_bias = torch.from_numpy(weights[attention_out_layernorm + "bias"])
-                    model_layer[0].dense.weight.copy_(out_dense_weight)
-                    model_layer[0].LayerNorm.weight.copy_(output_layernorm_weight)
-                    model_layer[0].dense.bias.copy_(out_dense_bias)
-                    model_layer[0].LayerNorm.bias.copy_(output_layernorm_bias)
-                elif kernel_id == 3:
-                    intermediate_dense_weight = torch.from_numpy(weights[intermediate + "weight"])
-                    intermediate_dense_bias = torch.from_numpy(weights[intermediate + "bias"])
-                    model_layer[0].dense.weight.copy_(intermediate_dense_weight)
-                    model_layer[0].dense.bias.copy_(intermediate_dense_bias)
-                elif kernel_id == 0:
-                    dense_weight = torch.from_numpy(weights[output_dense + "weight"])
-                    layernorm_weight = torch.from_numpy(weights[output_layer + "weight"])
-                    dense_bias = torch.from_numpy(weights[output_dense + "bias"])
-                    layernorm_bias = torch.from_numpy(weights[output_layer + "bias"])
-                    model_layer[0].dense.weight.copy_(dense_weight)
-                    model_layer[0].dense.bias.copy_(dense_bias)
-                    model_layer[0].LayerNorm.weight.copy_(layernorm_weight)
-                    model_layer[0].LayerNorm.bias.copy_(layernorm_bias)
+            model_layer.output.dense.weight.copy_(dense_weight)
+            model_layer.output.dense.bias.copy_(dense_bias)
+            model_layer.output.LayerNorm.weight.copy_(layernorm_weight)
+            model_layer.output.LayerNorm.bias.copy_(layernorm_bias)
+        elif kernel_id == 1:
+            query_weight = torch.from_numpy(weights[attention_q + "weight"])
+            key_weight = torch.from_numpy(weights[attention_k + "weight"])
+            value_weight = torch.from_numpy(weights[attention_v + "weight"])
+            query_bias = torch.from_numpy(weights[attention_q + "bias"])
+            key_bias = torch.from_numpy(weights[attention_k + "bias"])
+            value_bias = torch.from_numpy(weights[attention_v + "bias"])
+            model_layer[0].query.weight.copy_(query_weight)
+            model_layer[0].key.weight.copy_(key_weight)
+            model_layer[0].value.weight.copy_(value_weight)
+            model_layer[0].query.bias.copy_(query_bias)
+            model_layer[0].key.bias.copy_(key_bias)
+            model_layer[0].value.bias.copy_(value_bias)
+        elif kernel_id == 2:
+            out_dense_weight = torch.from_numpy(weights[attention_out_dense + "weight"])
+            output_layernorm_weight = torch.from_numpy(weights[attention_out_layernorm + "weight"])
+            out_dense_bias = torch.from_numpy(weights[attention_out_dense + "bias"])
+            output_layernorm_bias = torch.from_numpy(weights[attention_out_layernorm + "bias"])
+            model_layer[0].dense.weight.copy_(out_dense_weight)
+            model_layer[0].LayerNorm.weight.copy_(output_layernorm_weight)
+            model_layer[0].dense.bias.copy_(out_dense_bias)
+            model_layer[0].LayerNorm.bias.copy_(output_layernorm_bias)
+        elif kernel_id == 3:
+            intermediate_dense_weight = torch.from_numpy(weights[intermediate + "weight"])
+            intermediate_dense_bias = torch.from_numpy(weights[intermediate + "bias"])
+            model_layer[0].dense.weight.copy_(intermediate_dense_weight)
+            model_layer[0].dense.bias.copy_(intermediate_dense_bias)
+        elif kernel_id == 0:
+            dense_weight = torch.from_numpy(weights[output_dense + "weight"])
+            layernorm_weight = torch.from_numpy(weights[output_layer + "weight"])
+            dense_bias = torch.from_numpy(weights[output_dense + "bias"])
+            layernorm_bias = torch.from_numpy(weights[output_layer + "bias"])
+            model_layer[0].dense.weight.copy_(dense_weight)
+            model_layer[0].dense.bias.copy_(dense_bias)
+            model_layer[0].LayerNorm.weight.copy_(layernorm_weight)
+            model_layer[0].LayerNorm.bias.copy_(layernorm_bias)
 
     @torch.no_grad()
     def forward(self, data: TransformerShardData) -> TransformerShardData:
@@ -225,7 +223,7 @@ class BertTransformerShard(TransformerShard):
                 skip = x
 
         for i, op in enumerate(self.last_ops):
-            # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with _load_layer_weights()
+            # could drop modulus since 0<=i<4, but making 0<=kernel_id<4 is at least consistent with _load_weights_layer()
             x, skip = _forward_kernel(op, x, skip, (i+1)%4)
 
         if self.shard_config.is_last:
