@@ -207,22 +207,27 @@ class BertTransformerShardForSequenceClassification(TransformerShard):
             self._build_shard(model_weights)
 
     def _build_shard(self, weights):
-        # All stages do something with self.bert
-        bert_weights = {}
-        if weights is not None:
-            # Extract weights for inner BERT model
-            for key, val in weights.items():
-                if key.startswith('bert.'):
-                    bert_weights[key[len('bert.'):]] = val
-        self.bert = BertTransformerShard(self.shard_config, self.model_name, bert_weights)
+        ## all shards use the inner BERT model
+        self.bert = BertTransformerShard(self.shard_config, self.model_name,
+                                         self._extract_weights_bert(weights))
 
+        ## last shard
         if self.shard_config.is_last:
-            self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels)
             logger.debug(">>>> Load classifier for the last shard")
-            if weights is not None:
-                with torch.no_grad():
-                    self.classifier.weight.copy_(torch.from_numpy(weights['classifier.weight']))
-                    self.classifier.bias.copy_(torch.from_numpy(weights['classifier.bias']))
+            self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels)
+            self._load_weights_last(weights)
+
+    def _extract_weights_bert(self, weights):
+        bert_weights = {}
+        for key, val in weights.items():
+            if key.startswith('bert.'):
+                bert_weights[key[len('bert.'):]] = val
+        return bert_weights
+
+    @torch.no_grad()
+    def _load_weights_last(self, weights):
+        self.classifier.weight.copy_(torch.from_numpy(weights['classifier.weight']))
+        self.classifier.bias.copy_(torch.from_numpy(weights['classifier.bias']))
 
     @torch.no_grad()
     def forward(self, data: TransformerShardData) -> TransformerShardData:
