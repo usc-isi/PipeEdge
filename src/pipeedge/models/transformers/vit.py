@@ -3,7 +3,6 @@ from collections.abc import Mapping
 import logging
 import math
 import os
-import time
 from typing import Optional, Union
 import numpy as np
 import requests
@@ -174,7 +173,6 @@ class ViTTransformerShard(TransformerShard):
     @torch.no_grad()
     def forward(self, data: TransformerShardData) -> TransformerShardData:
         """Compute shard layers."""
-        start = time.time()
         x, skip = TransformerShard.parse_forward_data(data)
 
         if self.shard_config.is_first:
@@ -195,9 +193,6 @@ class ViTTransformerShard(TransformerShard):
         if self.shard_config.is_last:
             x = self.layernorm(x)
             x = self.classifier(x[:, 0, :])
-        end = time.time()
-
-        logger.info("Shard%d: computed microbatch in: %f sec", self.shard_config.stage, end - start)
 
         if self.shard_config.layer_end % 2 == 0:
             return x
