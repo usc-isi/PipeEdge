@@ -1,10 +1,13 @@
 """Model configurations and default parameters."""
+import logging
 from typing import Any, Callable, List, Optional, Tuple
 from torch.distributed import rpc as trpc
 from pipeedge.comm import p2p, rpc
 from pipeedge.models import ModuleShard, ModuleShardConfig
 from pipeedge.models.transformers import bert, deit, vit
 import devices
+
+_logger = logging.getLogger(__name__)
 
 _MODEL_CONFIGS = {}
 
@@ -73,6 +76,7 @@ def module_shard_factory(model_name: str, model_file: Optional[str], layer_start
                                      is_first=is_first, is_last=is_last)
     module = _MODEL_CONFIGS[model_name]['shard_module']
     shard = module(shard_config, model_name, model_file)
+    _logger.info("======= %s Stage %d =======", module.__name__, stage)
     shard.to(device=devices.DEVICE)
     return shard
 
@@ -101,6 +105,8 @@ def dist_rpc_pipeline_factory(model_name: str, model_file: Optional[str], stage_
         module_args = (shard_config, model_name, model_file)
         rref = trpc.remote(dst_rank, _dist_rpc_pipeline_stage_factory, args=(module,),
                            kwargs={ 'module_args': module_args })
+        trpc.remote(dst_rank, _logger.info,
+                    args=("======= %s Stage %d =======", module.__name__, i))
         stage_rrefs.append(rref)
     return rpc.DistRpcPipeline(stage_rrefs, results_to, results_cb)
 
