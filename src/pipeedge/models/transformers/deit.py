@@ -8,7 +8,9 @@ import numpy as np
 import torch
 from torch import nn
 from transformers.models.deit.modeling_deit import DeiTEmbeddings
-from transformers.models.vit.modeling_vit import ViTLayer, ViTSelfAttention, ViTSelfOutput, ViTIntermediate, ViTOutput
+from transformers.models.vit.modeling_vit import (
+    ViTIntermediate, ViTLayer, ViTOutput, ViTSelfAttention, ViTSelfOutput
+)
 from .. import ModuleShardConfig
 from . import TransformerShard, TransformerShardData
 

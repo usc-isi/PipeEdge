@@ -8,7 +8,10 @@ import numpy as np
 import torch
 from torch import nn
 from transformers import AutoModel, BertForSequenceClassification
-from transformers.models.bert.modeling_bert import BertEmbeddings, BertPooler, BertSelfAttention, BertSelfOutput, BertIntermediate, BertOutput, BertLayer
+from transformers.models.bert.modeling_bert import (
+    BertEmbeddings, BertIntermediate, BertLayer, BertOutput, BertPooler, BertSelfAttention,
+    BertSelfOutput
+)
 from .. import ModuleShardConfig
 from . import TransformerShard, TransformerShardData
 

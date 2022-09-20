@@ -9,7 +9,9 @@ import numpy as np
 import requests
 import torch
 from torch import nn
-from transformers.models.vit.modeling_vit import ViTEmbeddings, ViTLayer, ViTSelfAttention, ViTSelfOutput, ViTIntermediate, ViTOutput
+from transformers.models.vit.modeling_vit import (
+    ViTEmbeddings, ViTIntermediate, ViTLayer, ViTOutput, ViTSelfAttention, ViTSelfOutput
+)
 from .. import ModuleShardConfig
 from . import TransformerShard, TransformerShardData
 
