@@ -48,10 +48,6 @@ class ViTTransformerShard(TransformerShard):
     def __init__(self, config: ViTConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
         super().__init__(config, shard_config, model_weights)
-        if self.config.name_or_path == 'google/vit-huge-patch14-224-in21k':
-            # This ViT-Huge model doesn't include classification, so we have to set this ourselves
-            # NOTE: not setting 'id2label' or 'label2id'
-            self.config.num_labels = 21843
         self.embeddings = None
         self.layernorm = None
         self.classifier = None

@@ -25,6 +25,7 @@ _model_cfg_add('google/vit-base-patch16-224', 48, 'ViT-B_16-224.npz',
                vit.ViTTransformerShard)
 _model_cfg_add('google/vit-large-patch16-224', 96, 'ViT-L_16-224.npz',
                vit.ViTTransformerShard)
+# NOTE: This ViT-Huge model doesn't include classification, so the config must be extended
 _model_cfg_add('google/vit-huge-patch14-224-in21k', 128, 'ViT-H_14.npz',
                vit.ViTTransformerShard)
 # NOTE: BertTransformerShard alone doesn't do classification
@@ -56,7 +57,13 @@ def get_model_layers(model_name: str) -> int:
 def get_model_config(model_name: str) -> Any:
     """Get a model's config."""
     # We'll need more complexity if/when we add support for models not from `transformers`
-    return AutoConfig.from_pretrained(model_name)
+    config = AutoConfig.from_pretrained(model_name)
+    # Config overrides
+    if model_name == 'google/vit-huge-patch14-224-in21k':
+        # ViT-Huge doesn't include classification, so we have to set this ourselves
+        # NOTE: not setting 'id2label' or 'label2id'
+        config.num_labels = 21843
+    return config
 
 def get_model_default_weights_file(model_name: str) -> str:
     """Get a model's default weights file name."""
