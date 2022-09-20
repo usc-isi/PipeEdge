@@ -72,7 +72,7 @@ def module_shard_factory(model_name: str, model_file: Optional[str], layer_start
         model_file = get_model_default_weights_file(model_name)
     is_first = layer_start == 1
     is_last = layer_end == get_model_layers(model_name)
-    shard_config = ModuleShardConfig(stage=stage, layer_start=layer_start, layer_end=layer_end,
+    shard_config = ModuleShardConfig(layer_start=layer_start, layer_end=layer_end,
                                      is_first=is_first, is_last=is_last)
     module = _MODEL_CONFIGS[model_name]['shard_module']
     shard = module(shard_config, model_name, model_file)
@@ -100,7 +100,7 @@ def dist_rpc_pipeline_factory(model_name: str, model_file: Optional[str], stage_
     for i, (dst_rank, layers) in enumerate(zip(stage_ranks, stage_layers)):
         is_first = i == 0
         is_last = i == len(stage_ranks) - 1
-        shard_config = ModuleShardConfig(stage=i, layer_start=layers[0], layer_end=layers[1],
+        shard_config = ModuleShardConfig(layer_start=layers[0], layer_end=layers[1],
                                          is_first=is_first, is_last=is_last)
         module_args = (shard_config, model_name, model_file)
         rref = trpc.remote(dst_rank, _dist_rpc_pipeline_stage_factory, args=(module,),
