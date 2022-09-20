@@ -42,7 +42,7 @@ def _forward_kernel(layer, x, skip, kernel_id):
 
 
 class DeiTTransformerShard(TransformerShard):
-    """DeiT transformer shard."""
+    """DeiT transformer shard based on `DeiTModel`."""
 
     def __init__(self, shard_config: ModuleShardConfig, model_name: str,
                  model_weights: Union[str, Mapping]):

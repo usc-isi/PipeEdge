@@ -7,7 +7,7 @@ from typing import Union
 import numpy as np
 import torch
 from torch import nn
-from transformers import AutoModel, BertForSequenceClassification
+from transformers import BertForSequenceClassification, BertModel
 from transformers.models.bert.modeling_bert import (
     BertEmbeddings, BertIntermediate, BertLayer, BertOutput, BertPooler, BertSelfAttention,
     BertSelfOutput
@@ -34,7 +34,7 @@ def _forward_kernel(layer, x, skip, kernel_id):
 
 
 class BertTransformerShard(TransformerShard):
-    """BERT transformer shard."""
+    """BERT transformer shard based on `BertModel`."""
 
     def __init__(self, shard_config: ModuleShardConfig, model_name: str,
                  model_weights: Union[str, Mapping]):
@@ -188,7 +188,7 @@ class BertTransformerShard(TransformerShard):
     @staticmethod
     def save_weights(model_name: str, model_file: str) -> None:
         """Save the model weights file."""
-        model = AutoModel.from_pretrained(model_name)
+        model = BertModel.from_pretrained(model_name)
         state_dict = model.state_dict()
         weights = {}
         for key, val in state_dict.items():
@@ -197,7 +197,7 @@ class BertTransformerShard(TransformerShard):
 
 
 class BertTransformerShardForSequenceClassification(TransformerShard):
-    """BERT transformer shard for sequence classification."""
+    """BERT transformer shard based on `BertForSequenceClassification`."""
 
     def __init__(self, shard_config: ModuleShardConfig, model_name: str,
                  model_weights: Union[str, Mapping]):

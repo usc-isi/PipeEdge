@@ -43,7 +43,7 @@ def _forward_kernel(layer, x, skip, kernel_id):
 
 
 class ViTTransformerShard(TransformerShard):
-    """ViT transformer shard."""
+    """ViT transformer shard based on `ViTModel`."""
 
     def __init__(self, shard_config: ModuleShardConfig, model_name: str,
                  model_weights: Union[str, Mapping]):
