@@ -44,14 +44,14 @@ def _forward_kernel(layer, x, skip, kernel_id):
 class DeiTTransformerShard(TransformerShard):
     """DeiT transformer shard based on `DeiTModel`."""
 
-    def __init__(self, config: DeiTConfig, shard_config: ModuleShardConfig, model_name: str,
+    def __init__(self, config: DeiTConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
-        super().__init__(config, shard_config, model_name, model_weights)
+        super().__init__(config, shard_config, model_weights)
         self.embeddings = None
         self.layernorm = None
         self.classifier = None
 
-        logger.debug(">>>> Model name: %s", model_name)
+        logger.debug(">>>> Model name: %s", self.config.name_or_path)
         if isinstance(model_weights, str):
             logger.debug(">>>> Load weight file: %s", self.model_weights)
             with np.load(self.model_weights) as weights:

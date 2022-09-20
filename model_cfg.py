@@ -82,7 +82,7 @@ def module_shard_factory(model_name: str, model_file: Optional[str], layer_start
     shard_config = ModuleShardConfig(layer_start=layer_start, layer_end=layer_end,
                                      is_first=is_first, is_last=is_last)
     module = _MODEL_CONFIGS[model_name]['shard_module']
-    shard = module(config, shard_config, model_name, model_file)
+    shard = module(config, shard_config, model_file)
     _logger.info("======= %s Stage %d =======", module.__name__, stage)
     shard.to(device=devices.DEVICE)
     return shard
@@ -110,7 +110,7 @@ def dist_rpc_pipeline_factory(model_name: str, model_file: Optional[str], stage_
         is_last = i == len(stage_ranks) - 1
         shard_config = ModuleShardConfig(layer_start=layers[0], layer_end=layers[1],
                                          is_first=is_first, is_last=is_last)
-        module_args = (config, shard_config, model_name, model_file)
+        module_args = (config, shard_config, model_file)
         rref = trpc.remote(dst_rank, _dist_rpc_pipeline_stage_factory, args=(module,),
                            kwargs={ 'module_args': module_args })
         trpc.remote(dst_rank, _logger.info,

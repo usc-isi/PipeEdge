@@ -12,10 +12,9 @@ class TransformerShard(ModuleShard):
     """Abstract parent class for transformer shards."""
     # pylint: disable=abstract-method
 
-    def __init__(self, config: PretrainedConfig, shard_config: ModuleShardConfig, model_name: str,
+    def __init__(self, config: PretrainedConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
         super().__init__(config, shard_config)
-        self.model_name = model_name
         self.model_weights = model_weights
 
         ## operations/transformer layers set

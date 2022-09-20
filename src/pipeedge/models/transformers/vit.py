@@ -45,10 +45,10 @@ def _forward_kernel(layer, x, skip, kernel_id):
 class ViTTransformerShard(TransformerShard):
     """ViT transformer shard based on `ViTModel`."""
 
-    def __init__(self, config: ViTConfig, shard_config: ModuleShardConfig, model_name: str,
+    def __init__(self, config: ViTConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
-        super().__init__(config, shard_config, model_name, model_weights)
-        if self.model_name == 'google/vit-huge-patch14-224-in21k':
+        super().__init__(config, shard_config, model_weights)
+        if self.config.name_or_path == 'google/vit-huge-patch14-224-in21k':
             # This ViT-Huge model doesn't include classification, so we have to set this ourselves
             # NOTE: not setting 'id2label' or 'label2id'
             self.config.num_labels = 21843
@@ -56,7 +56,7 @@ class ViTTransformerShard(TransformerShard):
         self.layernorm = None
         self.classifier = None
 
-        logger.debug(">>>> Model name: %s", model_name)
+        logger.debug(">>>> Model name: %s", self.config.name_or_path)
         if isinstance(model_weights, str):
             logger.debug(">>>> Load weight file: %s", self.model_weights)
             with np.load(self.model_weights) as weights:
