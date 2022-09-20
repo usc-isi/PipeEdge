@@ -48,8 +48,6 @@ class BertTransformerShard(TransformerShard):
         else:
             self._build_shard(model_weights)
 
-        logger.info("======= Finish Build BertTransformerShard%d ==========", self.shard_config.stage)
-
     def _build_shard(self, weights):
         ## first Shard
         if self.shard_config.is_first:
@@ -207,9 +205,6 @@ class BertTransformerShardForSequenceClassification(TransformerShard):
                 self._build_shard(weights)
         else:
             self._build_shard(model_weights)
-        logger.info(
-            "======= Finish Build BertTransformerShardForSequenceClassification%d ==========",
-            self.shard_config.stage)
 
     def _build_shard(self, weights):
         # All stages do something with self.bert

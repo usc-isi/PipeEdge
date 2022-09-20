@@ -58,8 +58,6 @@ class DeiTTransformerShard(TransformerShard):
         else:
             self._build_shard(model_weights)
 
-        logger.info("======= Finish Build DeiTTransformerShard%d ==========", self.shard_config.stage)
-
     def _build_shard(self, weights):
         ## first Shard
         if self.shard_config.is_first:
