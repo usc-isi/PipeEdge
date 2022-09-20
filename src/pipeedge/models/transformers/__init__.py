@@ -2,7 +2,7 @@
 from collections.abc import Mapping
 from typing import Tuple, Type, Union
 from torch import nn, Tensor
-from transformers import AutoConfig
+from transformers import PretrainedConfig
 from .. import ModuleShard, ModuleShardConfig
 
 TransformerShardData: Type = Union[Tensor, Tuple[Tensor, Tensor]]
@@ -12,13 +12,11 @@ class TransformerShard(ModuleShard):
     """Abstract parent class for transformer shards."""
     # pylint: disable=abstract-method
 
-    def __init__(self, shard_config: ModuleShardConfig, model_name: str,
+    def __init__(self, config: PretrainedConfig, shard_config: ModuleShardConfig, model_name: str,
                  model_weights: Union[str, Mapping]):
-        super().__init__(shard_config)
+        super().__init__(config, shard_config)
         self.model_name = model_name
         self.model_weights = model_weights
-
-        self.config = AutoConfig.from_pretrained(model_name)
 
         ## operations/transformer layers set
         self.first_ops = nn.ModuleList()

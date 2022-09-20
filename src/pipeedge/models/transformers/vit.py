@@ -8,6 +8,7 @@ import numpy as np
 import requests
 import torch
 from torch import nn
+from transformers import ViTConfig
 from transformers.models.vit.modeling_vit import (
     ViTEmbeddings, ViTIntermediate, ViTLayer, ViTOutput, ViTSelfAttention, ViTSelfOutput
 )
@@ -44,9 +45,9 @@ def _forward_kernel(layer, x, skip, kernel_id):
 class ViTTransformerShard(TransformerShard):
     """ViT transformer shard based on `ViTModel`."""
 
-    def __init__(self, shard_config: ModuleShardConfig, model_name: str,
+    def __init__(self, config: ViTConfig, shard_config: ModuleShardConfig, model_name: str,
                  model_weights: Union[str, Mapping]):
-        super().__init__(shard_config, model_name, model_weights)
+        super().__init__(config, shard_config, model_name, model_weights)
         if self.model_name == 'google/vit-huge-patch14-224-in21k':
             # This ViT-Huge model doesn't include classification, so we have to set this ourselves
             # NOTE: not setting 'id2label' or 'label2id'

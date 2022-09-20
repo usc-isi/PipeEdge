@@ -2,6 +2,7 @@
 import logging
 from typing import Any, Callable, List, Optional, Tuple
 from torch.distributed import rpc as trpc
+from transformers import AutoConfig
 from pipeedge.comm import p2p, rpc
 from pipeedge.models import ModuleShard, ModuleShardConfig
 from pipeedge.models.transformers import bert, deit, vit
@@ -52,6 +53,11 @@ def get_model_layers(model_name: str) -> int:
     """Get a model's layer count."""
     return _MODEL_CONFIGS[model_name]['layers']
 
+def get_model_config(model_name: str) -> Any:
+    """Get a model's config."""
+    # We'll need more complexity if/when we add support for models not from `transformers`
+    return AutoConfig.from_pretrained(model_name)
+
 def get_model_default_weights_file(model_name: str) -> str:
     """Get a model's default weights file name."""
     return _MODEL_CONFIGS[model_name]['weights_file']
@@ -70,12 +76,13 @@ def module_shard_factory(model_name: str, model_file: Optional[str], layer_start
     # This works b/c all shard implementations have the same constructor interface
     if model_file is None:
         model_file = get_model_default_weights_file(model_name)
+    config = get_model_config(model_name)
     is_first = layer_start == 1
     is_last = layer_end == get_model_layers(model_name)
     shard_config = ModuleShardConfig(layer_start=layer_start, layer_end=layer_end,
                                      is_first=is_first, is_last=is_last)
     module = _MODEL_CONFIGS[model_name]['shard_module']
-    shard = module(shard_config, model_name, model_file)
+    shard = module(config, shard_config, model_name, model_file)
     _logger.info("======= %s Stage %d =======", module.__name__, stage)
     shard.to(device=devices.DEVICE)
     return shard
@@ -98,11 +105,12 @@ def dist_rpc_pipeline_factory(model_name: str, model_file: Optional[str], stage_
     assert len(stage_ranks) > 0
     assert len(stage_ranks) == len(stage_layers)
     for i, (dst_rank, layers) in enumerate(zip(stage_ranks, stage_layers)):
+        config = get_model_config(model_name)
         is_first = i == 0
         is_last = i == len(stage_ranks) - 1
         shard_config = ModuleShardConfig(layer_start=layers[0], layer_end=layers[1],
                                          is_first=is_first, is_last=is_last)
-        module_args = (shard_config, model_name, model_file)
+        module_args = (config, shard_config, model_name, model_file)
         rref = trpc.remote(dst_rank, _dist_rpc_pipeline_stage_factory, args=(module,),
                            kwargs={ 'module_args': module_args })
         trpc.remote(dst_rank, _logger.info,

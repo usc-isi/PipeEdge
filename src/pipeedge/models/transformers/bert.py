@@ -6,7 +6,7 @@ from typing import Union
 import numpy as np
 import torch
 from torch import nn
-from transformers import BertForSequenceClassification, BertModel
+from transformers import BertConfig, BertForSequenceClassification, BertModel
 from transformers.models.bert.modeling_bert import (
     BertEmbeddings, BertIntermediate, BertLayer, BertOutput, BertPooler, BertSelfAttention,
     BertSelfOutput
@@ -35,9 +35,9 @@ def _forward_kernel(layer, x, skip, kernel_id):
 class BertTransformerShard(TransformerShard):
     """BERT transformer shard based on `BertModel`."""
 
-    def __init__(self, shard_config: ModuleShardConfig, model_name: str,
+    def __init__(self, config: BertConfig, shard_config: ModuleShardConfig, model_name: str,
                  model_weights: Union[str, Mapping]):
-        super().__init__(shard_config, model_name, model_weights)
+        super().__init__(config, shard_config, model_name, model_weights)
         self.embeddings = None
 
         logger.debug(">>>> Model name: %s", model_name)
@@ -192,9 +192,9 @@ class BertTransformerShard(TransformerShard):
 class BertTransformerShardForSequenceClassification(TransformerShard):
     """BERT transformer shard based on `BertForSequenceClassification`."""
 
-    def __init__(self, shard_config: ModuleShardConfig, model_name: str,
+    def __init__(self, config: BertConfig, shard_config: ModuleShardConfig, model_name: str,
                  model_weights: Union[str, Mapping]):
-        super().__init__(shard_config, model_name, model_weights)
+        super().__init__(config, shard_config, model_name, model_weights)
         self.bert = None
         self.classifier = None
 
@@ -208,7 +208,7 @@ class BertTransformerShardForSequenceClassification(TransformerShard):
 
     def _build_shard(self, weights):
         ## all shards use the inner BERT model
-        self.bert = BertTransformerShard(self.shard_config, self.model_name,
+        self.bert = BertTransformerShard(self.config, self.shard_config, self.model_name,
                                          self._extract_weights_bert(weights))
 
         ## last shard

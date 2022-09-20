@@ -6,6 +6,7 @@ from typing import Optional, Union
 import numpy as np
 import torch
 from torch import nn
+from transformers import DeiTConfig
 from transformers.models.deit.modeling_deit import DeiTEmbeddings
 from transformers.models.vit.modeling_vit import (
     ViTIntermediate, ViTLayer, ViTOutput, ViTSelfAttention, ViTSelfOutput
@@ -43,9 +44,9 @@ def _forward_kernel(layer, x, skip, kernel_id):
 class DeiTTransformerShard(TransformerShard):
     """DeiT transformer shard based on `DeiTModel`."""
 
-    def __init__(self, shard_config: ModuleShardConfig, model_name: str,
+    def __init__(self, config: DeiTConfig, shard_config: ModuleShardConfig, model_name: str,
                  model_weights: Union[str, Mapping]):
-        super().__init__(shard_config, model_name, model_weights)
+        super().__init__(config, shard_config, model_name, model_weights)
         self.embeddings = None
         self.layernorm = None
         self.classifier = None

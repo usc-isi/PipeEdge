@@ -1,5 +1,5 @@
 """Models module."""
-from typing import Tuple, Type, Union
+from typing import Any, Tuple, Type, Union
 from torch import nn, Tensor
 
 ModuleShardData: Type = Union[Tensor, Tuple[Tensor, ...]]
@@ -26,8 +26,9 @@ class ModuleShard(nn.Module):
     """Abstract parent class for module shards."""
     # pylint: disable=abstract-method
 
-    def __init__(self, shard_config: ModuleShardConfig):
+    def __init__(self, config: Any, shard_config: ModuleShardConfig):
         super().__init__()
+        self.config = config
         self.shard_config = shard_config
 
 
