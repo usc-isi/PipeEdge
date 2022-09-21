@@ -41,8 +41,8 @@ def _forward_kernel(layer, x, skip, kernel_id):
     return x, skip
 
 
-class DeiTTransformerShard(TransformerShard):
-    """DeiT transformer shard based on `DeiTModel`."""
+class DeiTModelShard(TransformerShard):
+    """Module shard based on `DeiTModel`."""
 
     def __init__(self, config: DeiTConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
@@ -205,8 +205,8 @@ class DeiTTransformerShard(TransformerShard):
         np.savez(model_file, **weights)
 
 
-class DeiTTransformerShardForImageClassification(TransformerShard):
-    """ViT transformer shard based on `DeiTForImageClassification`."""
+class DeiTShardForImageClassification(TransformerShard):
+    """Module shard based on `DeiTForImageClassification`."""
 
     def __init__(self, config: DeiTConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
@@ -224,7 +224,7 @@ class DeiTTransformerShardForImageClassification(TransformerShard):
 
     def _build_shard(self, weights):
         ## all shards use the inner DeiT model
-        self.deit = DeiTTransformerShard(self.config, self.shard_config, weights)
+        self.deit = DeiTModelShard(self.config, self.shard_config, weights)
 
         ## last Shard
         if self.shard_config.is_last:
@@ -249,5 +249,5 @@ class DeiTTransformerShardForImageClassification(TransformerShard):
     def save_weights(model_name: str, model_file: str, hub_repo: str='facebookresearch/deit:main',
                      hub_model_name: Optional[str]=None) -> None:
         """Save the model weights file."""
-        DeiTTransformerShard.save_weights(model_name, model_file, hub_repo=hub_repo,
-                                          hub_model_name=hub_model_name)
+        DeiTModelShard.save_weights(model_name, model_file, hub_repo=hub_repo,
+                                    hub_model_name=hub_model_name)

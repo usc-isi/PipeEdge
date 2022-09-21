@@ -42,8 +42,8 @@ def _forward_kernel(layer, x, skip, kernel_id):
     return x, skip
 
 
-class ViTTransformerShard(TransformerShard):
-    """ViT transformer shard based on `ViTModel` (no pooling layer)."""
+class ViTModelShard(TransformerShard):
+    """Module shard based on `ViTModel` (no pooling layer)."""
 
     def __init__(self, config: ViTConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
@@ -205,8 +205,8 @@ class ViTTransformerShard(TransformerShard):
                     os.fsync(file.fileno())
 
 
-class ViTTransformerShardForImageClassification(TransformerShard):
-    """ViT transformer shard based on `ViTForImageClassification`."""
+class ViTShardForImageClassification(TransformerShard):
+    """Module shard based on `ViTForImageClassification`."""
 
     def __init__(self, config: ViTConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
@@ -224,7 +224,7 @@ class ViTTransformerShardForImageClassification(TransformerShard):
 
     def _build_shard(self, weights):
         ## all shards use the inner ViT model
-        self.vit = ViTTransformerShard(self.config, self.shard_config, weights)
+        self.vit = ViTModelShard(self.config, self.shard_config, weights)
 
         ## last Shard
         if self.shard_config.is_last:
@@ -249,4 +249,4 @@ class ViTTransformerShardForImageClassification(TransformerShard):
     def save_weights(model_name: str, model_file: str, url: Optional[str]=None,
                      timeout_sec: Optional[float]=None) -> None:
         """Save the model weights file."""
-        ViTTransformerShard.save_weights(model_name, model_file, url=url, timeout_sec=timeout_sec)
+        ViTModelShard.save_weights(model_name, model_file, url=url, timeout_sec=timeout_sec)

@@ -32,8 +32,8 @@ def _forward_kernel(layer, x, skip, kernel_id):
     return x, skip
 
 
-class BertTransformerShard(TransformerShard):
-    """BERT transformer shard based on `BertModel`."""
+class BertModelShard(TransformerShard):
+    """Module shard based on `BertModel`."""
 
     def __init__(self, config: BertConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
@@ -189,8 +189,8 @@ class BertTransformerShard(TransformerShard):
         np.savez(model_file, **weights)
 
 
-class BertTransformerShardForSequenceClassification(TransformerShard):
-    """BERT transformer shard based on `BertForSequenceClassification`."""
+class BertShardForSequenceClassification(TransformerShard):
+    """Module shard based on `BertForSequenceClassification`."""
 
     def __init__(self, config: BertConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
@@ -208,8 +208,8 @@ class BertTransformerShardForSequenceClassification(TransformerShard):
 
     def _build_shard(self, weights):
         ## all shards use the inner BERT model
-        self.bert = BertTransformerShard(self.config, self.shard_config,
-                                         self._extract_weights_bert(weights))
+        self.bert = BertModelShard(self.config, self.shard_config,
+                                   self._extract_weights_bert(weights))
 
         ## last shard
         if self.shard_config.is_last:
