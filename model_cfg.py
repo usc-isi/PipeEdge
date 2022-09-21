@@ -36,11 +36,11 @@ _model_cfg_add('bert-large-uncased', 96, 'BERT-L.npz',
 _model_cfg_add('textattack/bert-base-uncased-CoLA', 48, 'BERT-B-CoLA.npz',
                bert.BertTransformerShardForSequenceClassification)
 _model_cfg_add('facebook/deit-base-distilled-patch16-224', 48, 'DeiT_B_distilled.npz',
-               deit.DeiTTransformerShard)
+               deit.DeiTTransformerShardForImageClassification)
 _model_cfg_add('facebook/deit-small-distilled-patch16-224', 48, 'DeiT_S_distilled.npz',
-               deit.DeiTTransformerShard)
+               deit.DeiTTransformerShardForImageClassification)
 _model_cfg_add('facebook/deit-tiny-distilled-patch16-224', 48, 'DeiT_T_distilled.npz',
-               deit.DeiTTransformerShard)
+               deit.DeiTTransformerShardForImageClassification)
 
 def get_model_names() -> List[str]:
     """Get a list of available model names."""
