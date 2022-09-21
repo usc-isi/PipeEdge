@@ -43,14 +43,13 @@ def _forward_kernel(layer, x, skip, kernel_id):
 
 
 class ViTTransformerShard(TransformerShard):
-    """ViT transformer shard based on `ViTModel`."""
+    """ViT transformer shard based on `ViTModel` (no pooling layer)."""
 
     def __init__(self, config: ViTConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
         super().__init__(config, shard_config, model_weights)
         self.embeddings = None
         self.layernorm = None
-        self.classifier = None
 
         logger.debug(">>>> Model name: %s", self.config.name_or_path)
         if isinstance(model_weights, str):
@@ -93,9 +92,8 @@ class ViTTransformerShard(TransformerShard):
 
         ## last Shard
         if self.shard_config.is_last:
-            logger.debug(">>>> Load layernorm and classifier for the last shard")
+            logger.debug(">>>> Load layernorm for the last shard")
             self.layernorm = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
-            self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels) if self.config.num_labels > 0 else nn.Identity()
             self._load_weights_last(weights)
 
     def _build_kernel(self, weights, kernel_id, model_layer_id):
@@ -127,8 +125,6 @@ class ViTTransformerShard(TransformerShard):
     def _load_weights_last(self, weights):
         self.layernorm.weight.copy_(torch.from_numpy(weights["Transformer/encoder_norm/scale"]))
         self.layernorm.bias.copy_(torch.from_numpy(weights["Transformer/encoder_norm/bias"]))
-        self.classifier.weight.copy_(torch.from_numpy(np.transpose(weights["head/kernel"])))
-        self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))
 
     @torch.no_grad()
     def _load_weights_layer(self, weights, model_layer_id, model_layer, kernel_id=None):
@@ -187,7 +183,6 @@ class ViTTransformerShard(TransformerShard):
 
         if self.shard_config.is_last:
             x = self.layernorm(x)
-            x = self.classifier(x[:, 0, :])
 
         if self.shard_config.layer_end % 2 == 0:
             return x
@@ -208,3 +203,50 @@ class ViTTransformerShard(TransformerShard):
                     file.write(chunk)
                     file.flush()
                     os.fsync(file.fileno())
+
+
+class ViTTransformerShardForImageClassification(TransformerShard):
+    """ViT transformer shard based on `ViTForImageClassification`."""
+
+    def __init__(self, config: ViTConfig, shard_config: ModuleShardConfig,
+                 model_weights: Union[str, Mapping]):
+        super().__init__(config, shard_config, model_weights)
+        self.vit = None
+        self.classifier = None
+
+        logger.debug(">>>> Model name: %s", self.config.name_or_path)
+        if isinstance(model_weights, str):
+            logger.debug(">>>> Load weight file: %s", self.model_weights)
+            with np.load(self.model_weights) as weights:
+                self._build_shard(weights)
+        else:
+            self._build_shard(model_weights)
+
+    def _build_shard(self, weights):
+        ## all shards use the inner ViT model
+        self.vit = ViTTransformerShard(self.config, self.shard_config, weights)
+
+        ## last Shard
+        if self.shard_config.is_last:
+            logger.debug(">>>> Load classifier for the last shard")
+            self.classifier = nn.Linear(self.config.hidden_size, self.config.num_labels) if self.config.num_labels > 0 else nn.Identity()
+            self._load_weights_last(weights)
+
+    @torch.no_grad()
+    def _load_weights_last(self, weights):
+        self.classifier.weight.copy_(torch.from_numpy(np.transpose(weights["head/kernel"])))
+        self.classifier.bias.copy_(torch.from_numpy(weights["head/bias"]))
+
+    @torch.no_grad()
+    def forward(self, data: TransformerShardData) -> TransformerShardData:
+        """Compute shard layers."""
+        data = self.vit(data)
+        if self.shard_config.is_last:
+            data = self.classifier(data[:, 0, :])
+        return data
+
+    @staticmethod
+    def save_weights(model_name: str, model_file: str, url: Optional[str]=None,
+                     timeout_sec: Optional[float]=None) -> None:
+        """Save the model weights file."""
+        ViTTransformerShard.save_weights(model_name, model_file, url=url, timeout_sec=timeout_sec)

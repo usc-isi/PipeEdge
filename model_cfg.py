@@ -22,12 +22,12 @@ def _model_cfg_add(name, layers, weights_file, shard_module):
 
 # Transformer blocks can be split 4 ways, e.g., where ViT-Base has 12 layers, we specify 12*4=48
 _model_cfg_add('google/vit-base-patch16-224', 48, 'ViT-B_16-224.npz',
-               vit.ViTTransformerShard)
+               vit.ViTTransformerShardForImageClassification)
 _model_cfg_add('google/vit-large-patch16-224', 96, 'ViT-L_16-224.npz',
-               vit.ViTTransformerShard)
+               vit.ViTTransformerShardForImageClassification)
 # NOTE: This ViT-Huge model doesn't include classification, so the config must be extended
 _model_cfg_add('google/vit-huge-patch14-224-in21k', 128, 'ViT-H_14.npz',
-               vit.ViTTransformerShard)
+               vit.ViTTransformerShardForImageClassification)
 # NOTE: BertTransformerShard alone doesn't do classification
 _model_cfg_add('bert-base-uncased', 48, 'BERT-B.npz',
                bert.BertTransformerShard)
