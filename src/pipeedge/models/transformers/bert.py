@@ -62,14 +62,14 @@ class BertModelShard(TransformerShard):
 
     def __init__(self, config: BertConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
-        super().__init__(config, shard_config, model_weights)
+        super().__init__(config, shard_config)
         self.embeddings = None
         self.pooler = None
 
         logger.debug(">>>> Model name: %s", self.config.name_or_path)
         if isinstance(model_weights, str):
-            logger.debug(">>>> Load weight file: %s", self.model_weights)
-            with np.load(self.model_weights) as weights:
+            logger.debug(">>>> Load weight file: %s", model_weights)
+            with np.load(model_weights) as weights:
                 self._build_shard(weights)
         else:
             self._build_shard(model_weights)
@@ -168,14 +168,14 @@ class BertShardForSequenceClassification(TransformerShard):
 
     def __init__(self, config: BertConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
-        super().__init__(config, shard_config, model_weights)
+        super().__init__(config, shard_config)
         self.bert = None
         self.classifier = None
 
         logger.debug(">>>> Model name: %s", self.config.name_or_path)
         if isinstance(model_weights, str):
-            logger.debug(">>>> Load weight file: %s", self.model_weights)
-            with np.load(self.model_weights) as weights:
+            logger.debug(">>>> Load weight file: %s", model_weights)
+            with np.load(model_weights) as weights:
                 self._build_shard(weights)
         else:
             self._build_shard(model_weights)
