@@ -64,6 +64,7 @@ class BertModelShard(TransformerShard):
                  model_weights: Union[str, Mapping]):
         super().__init__(config, shard_config, model_weights)
         self.embeddings = None
+        self.pooler = None
 
         logger.debug(">>>> Model name: %s", self.config.name_or_path)
         if isinstance(model_weights, str):
@@ -98,8 +99,8 @@ class BertModelShard(TransformerShard):
 
         if self.shard_config.is_last:
             logger.debug(">>>> Load pooler for the last shard")
-            self.bertpooler = BertPooler(self.config)
-            self.bertpooler.eval()
+            self.pooler = BertPooler(self.config)
+            self.pooler.eval()
             self._load_weights_last(weights)
 
     @torch.no_grad()
@@ -113,8 +114,8 @@ class BertModelShard(TransformerShard):
 
     @torch.no_grad()
     def _load_weights_last(self, weights):
-        self.bertpooler.dense.weight.copy_(torch.from_numpy(weights["pooler.dense.weight"]))
-        self.bertpooler.dense.bias.copy_(torch.from_numpy(weights['pooler.dense.bias']))
+        self.pooler.dense.weight.copy_(torch.from_numpy(weights["pooler.dense.weight"]))
+        self.pooler.dense.bias.copy_(torch.from_numpy(weights['pooler.dense.bias']))
 
     @torch.no_grad()
     def _load_weights_layer(self, weights, layer_id, layer):
@@ -148,7 +149,7 @@ class BertModelShard(TransformerShard):
         for layer in self.model_layers:
             data = layer(data)
         if self.shard_config.is_last:
-            data = self.bertpooler(data)
+            data = self.pooler(data)
         return data
 
     @staticmethod
