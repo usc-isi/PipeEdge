@@ -31,6 +31,10 @@ class ModuleShard(nn.Module):
         self.config = config
         self.shard_config = shard_config
 
+    def has_layer(self, layer: int) -> bool:
+        """Check if shard has the specified layer."""
+        return layer in range(self.shard_config.layer_start, self.shard_config.layer_end + 1)
+
 
 def get_microbatch_size(shard_data: ModuleShardData, verify: bool=False):
     """Get the microbatch size from shard data."""

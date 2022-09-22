@@ -16,11 +16,7 @@ class TransformerShard(ModuleShard):
                  model_weights: Union[str, Mapping]):
         super().__init__(config, shard_config)
         self.model_weights = model_weights
-
-        ## operations/transformer layers set
-        self.first_ops = nn.ModuleList()
         self.model_layers = nn.ModuleList()
-        self.last_ops = nn.ModuleList()
 
     @staticmethod
     def parse_forward_data(data: TransformerShardData) -> Tuple[Tensor, Tensor]:
