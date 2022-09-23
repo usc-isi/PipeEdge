@@ -41,20 +41,15 @@ class BertLayerShard(ModuleShard):
     @torch.no_grad()
     def forward(self, data: TransformerShardData) -> TransformerShardData:
         """Compute layer shard."""
-        data, skip = TransformerShard.parse_forward_data(data)
         if self.has_layer(0):
-            data = self.self_attention(data)[0]
+            data = (self.self_attention(data)[0], data)
         if self.has_layer(1):
-            data = self.self_output(data, skip)
-            skip = data
+            data = self.self_output(data[0], data[1])
         if self.has_layer(2):
-            data = self.intermediate(data)
+            data = (self.intermediate(data), data)
         if self.has_layer(3):
-            data = self.output(data, skip)
-            skip = data
-        if self.shard_config.layer_end % 2 > 0:
-            return data
-        return data, skip
+            data = self.output(data[0], data[1])
+        return data
 
 
 class BertModelShard(TransformerShard):

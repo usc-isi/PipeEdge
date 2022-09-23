@@ -55,23 +55,19 @@ class ViTLayerShard(ModuleShard):
     @torch.no_grad()
     def forward(self, data: TransformerShardData) -> TransformerShardData:
         """Compute layer shard."""
-        data, skip = TransformerShard.parse_forward_data(data)
         if self.has_layer(0):
-            data = self.layernorm_before(data)
-            data = self.self_attention(data)[0]
+            data_norm = self.layernorm_before(data)
+            data = (self.self_attention(data_norm)[0], data)
         if self.has_layer(1):
-            data = self.self_output(data, skip)
+            skip = data[1]
+            data = self.self_output(data[0], skip)
             data += skip
-            skip = data
         if self.has_layer(2):
-            data = self.layernorm_after(data)
-            data = self.intermediate(data)
+            data_norm = self.layernorm_after(data)
+            data = (self.intermediate(data_norm), data)
         if self.has_layer(3):
-            data = self.output(data, skip)
-            skip = data
-        if self.shard_config.layer_end % 2 > 0:
-            return data
-        return data, skip
+            data = self.output(data[0], data[1])
+        return data
 
 
 class ViTModelShard(TransformerShard):
