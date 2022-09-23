@@ -7,7 +7,7 @@ from typing import Any, Callable, List, Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 from .. import DistCmdHandler, DistContext
-from .util import DistRequestWaitDaemon
+from . import util
 
 # Base tag values
 TAG_BASE_DATA = 0
@@ -19,6 +19,7 @@ TAG_TENSOR_DTYPE = 1
 TAG_TENSOR_SHAPE_LEN = 2
 TAG_TENSOR_SHAPE = 3
 TAG_TENSOR = 4
+TAG_TENSOR_PICKLED_SIZE = 5
 
 # Ordered set of torch types: https://pytorch.org/docs/stable/tensor_attributes.html
 TORCH_TYPES = [ torch.float32,
@@ -166,20 +167,31 @@ class TensorSendThread(AbstractTensorExchangeThread):
                     if self._evt_stop_thread.is_set():
                         return
                     self._queue_out.condition.wait()
-                tensors = self._queue_out.get(block=False)
+                payload = self._queue_out.get(block=False)
                 self._queue_out.condition.notify_all()
-            # tensors come in pairs, except for the last stage results
-            if isinstance(tensors, torch.Tensor):
-                tensors = (tensors,)
-            assert isinstance(tensors, tuple)
-            assert len(tensors) > 0
-            assert isinstance(tensors[0], torch.Tensor)
-            _tensor_count = len(tensors)
-            tensor_count = torch.tensor(_tensor_count, dtype=torch.int)
+            # Avoids pickling tensors if payload is a Tensor or Tuple[Tensor, ...]
+            if isinstance(payload, tuple):
+                objs = payload
+                tensor_count = torch.tensor(len(objs), dtype=torch.int)
+            else:
+                objs = (payload,)
+                tensor_count = torch.tensor(-1, dtype=torch.int)
+            # pickle as needed
+            tensors = ()
+            tensor_sizes = ()
+            for obj in objs:
+                if isinstance(obj, torch.Tensor):
+                    tensor, tensor_size = obj, torch.LongTensor([-1])
+                else:
+                    tensor, tensor_size = util.object_to_tensor(obj, None)
+                tensors += (tensor,)
+                tensor_sizes += (tensor_size,)
             dist.send(tensor=tensor_count, dst=self._dst_rank, tag=TAG_BASE_DATA+TAG_TENSOR_COUNT)
-            # NOTE: could optimize by only sending dtype once (it's the same for all tensors)
+            # pre/post hooks should only wrap tensor send, not any pickling work (above)
             self._call_pre_hooks()
-            for tensor in tensors:
+            for tensor, tensor_size in zip(tensors, tensor_sizes):
+                dist.send(tensor=tensor_size, dst=self._dst_rank,
+                          tag=TAG_BASE_DATA+TAG_TENSOR_PICKLED_SIZE)
                 _send_tensor(tensor, self._dst_rank, TAG_BASE_DATA)
             self._call_post_hooks(tensors)
 
@@ -201,33 +213,40 @@ class TensorRecvThread(AbstractTensorExchangeThread):
         """Receive tensors and enqueue them."""
         while True:
             tensor_count = torch.zeros(1, dtype=torch.int)
-            ircv_req = dist.irecv(tensor=tensor_count, src=self._src_rank, tag=TAG_BASE_DATA+TAG_TENSOR_COUNT)
-            ircv_req_t = DistRequestWaitDaemon(ircv_req)
+            ircv_req = dist.irecv(tensor=tensor_count, src=self._src_rank,
+                                  tag=TAG_BASE_DATA+TAG_TENSOR_COUNT)
+            ircv_req_t = util.DistRequestWaitDaemon(ircv_req)
             ircv_req_t.start()
             while ircv_req_t.is_alive():
                 if self._evt_stop_thread.is_set():
                     return
                 # TODO: we're basically spinning...
                 time.sleep(0.1)
-            _tensor_count = int(tensor_count)
-            assert _tensor_count > 0
             tensors = ()
+            tensor_sizes = ()
+            # pre/post hooks should only wrap tensor recv, not any unpickling work (further below)
             self._call_pre_hooks()
-            for _ in range(_tensor_count):
+            for _ in range(abs(tensor_count)):
+                tensor_size = torch.LongTensor([-1])
+                dist.recv(tensor=tensor_size, src=self._src_rank,
+                          tag=TAG_BASE_DATA+TAG_TENSOR_PICKLED_SIZE)
                 tensor = _recv_tensor(self._src_rank, TAG_BASE_DATA)
+                tensor_sizes += (tensor_size,)
                 tensors += (tensor,)
             self._call_post_hooks(tensors)
-            if _tensor_count == 1:
-                # At this point, we don't know whether the original data type was a Tensor or Tuple[Tensor] w/ len=1.
-                # We'd have to include that information in a separate message to know for sure.
-                # For now, it works to reduce to the base case - just a single Tensor.
-                tensors = tensors[0]
+            # unpickle as needed
+            objs = ()
+            for tensor, tensor_size in zip(tensors, tensor_sizes):
+                obj = tensor if tensor_size < 0 else util.tensor_to_object(tensor, tensor_size)
+                objs += (obj,)
+            # if tensor_count >= 0, then the original payload was a tuple
+            payload = objs if tensor_count >= 0 else objs[0]
             # Blocks if queue is full, which then blocks receiving more tensors (as intended)
             # Worker thread must be running to avoid indefinite blocking
             with self._queue_in.condition:
                 while self._queue_in.full():
                     self._queue_in.condition.wait()
-                self._queue_in.put(tensors)
+                self._queue_in.put(payload)
                 self._queue_in.condition.notify_all()
 
 
@@ -286,7 +305,7 @@ class CommandThread(threading.Thread):
             # contains (1) CMD enumeration and (2) an optional tensor count
             tensor_cmd = torch.zeros(2, dtype=torch.int)
             ircv_req = dist.irecv(tensor=tensor_cmd, tag=TAG_BASE_CMD)
-            ircv_req_t = DistRequestWaitDaemon(ircv_req)
+            ircv_req_t = util.DistRequestWaitDaemon(ircv_req)
             ircv_req_t.start()
             while ircv_req_t.is_alive():
                 if self._evt_stop_thread.is_set():
