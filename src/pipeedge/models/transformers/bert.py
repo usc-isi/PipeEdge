@@ -11,7 +11,7 @@ from transformers.models.bert.modeling_bert import (
     BertEmbeddings, BertIntermediate, BertOutput, BertPooler, BertSelfAttention, BertSelfOutput
 )
 from .. import ModuleShard, ModuleShardConfig
-from . import TransformerShard, TransformerShardData
+from . import TransformerShardData
 
 
 logger = logging.getLogger(__name__)
@@ -52,13 +52,16 @@ class BertLayerShard(ModuleShard):
         return data
 
 
-class BertModelShard(TransformerShard):
+class BertModelShard(ModuleShard):
     """Module shard based on `BertModel`."""
 
     def __init__(self, config: BertConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
         super().__init__(config, shard_config)
         self.embeddings = None
+        # BertModel uses an encoder here, but we'll just add the layers here instead.
+        # Since we just do inference, a BertEncoderShard class wouldn't provide real benefit.
+        self.layers = nn.ModuleList()
         self.pooler = None
 
         logger.debug(">>>> Model name: %s", self.config.name_or_path)
@@ -89,7 +92,7 @@ class BertModelShard(TransformerShard):
             layer_config = ModuleShardConfig(layer_start=sublayer_start, layer_end=sublayer_end)
             layer = BertLayerShard(self.config, layer_config)
             self._load_weights_layer(weights, layer_id, layer)
-            self.model_layers.append(layer)
+            self.layers.append(layer)
             layer_curr += sublayer_end - sublayer_start + 1
 
         if self.shard_config.is_last:
@@ -141,7 +144,7 @@ class BertModelShard(TransformerShard):
         """Compute shard layers."""
         if self.shard_config.is_first:
             data = self.embeddings(data)
-        for layer in self.model_layers:
+        for layer in self.layers:
             data = layer(data)
         if self.shard_config.is_last:
             data = self.pooler(data)
@@ -158,7 +161,7 @@ class BertModelShard(TransformerShard):
         np.savez(model_file, **weights)
 
 
-class BertShardForSequenceClassification(TransformerShard):
+class BertShardForSequenceClassification(ModuleShard):
     """Module shard based on `BertForSequenceClassification`."""
 
     def __init__(self, config: BertConfig, shard_config: ModuleShardConfig,

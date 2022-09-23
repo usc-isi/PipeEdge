@@ -12,7 +12,7 @@ from transformers.models.vit.modeling_vit import (
     ViTIntermediate, ViTOutput, ViTSelfAttention, ViTSelfOutput
 )
 from .. import ModuleShard, ModuleShardConfig
-from . import TransformerShard, TransformerShardData
+from . import TransformerShardData
 
 
 logger = logging.getLogger(__name__)
@@ -69,13 +69,16 @@ class DeiTLayerShard(ModuleShard):
         return data
 
 
-class DeiTModelShard(TransformerShard):
+class DeiTModelShard(ModuleShard):
     """Module shard based on `DeiTModel`."""
 
     def __init__(self, config: DeiTConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
         super().__init__(config, shard_config)
         self.embeddings = None
+        # DeiTModel uses an encoder here, but we'll just add the layers here instead.
+        # Since we just do inference, a DeiTEncoderShard class wouldn't provide real benefit.
+        self.layers = nn.ModuleList()
         self.layernorm = None
 
         logger.debug(">>>> Model name: %s", self.config.name_or_path)
@@ -105,7 +108,7 @@ class DeiTModelShard(TransformerShard):
             layer_config = ModuleShardConfig(layer_start=sublayer_start, layer_end=sublayer_end)
             layer = DeiTLayerShard(self.config, layer_config)
             self._load_weights_layer(weights, layer_id, layer)
-            self.model_layers.append(layer)
+            self.layers.append(layer)
             layer_curr += sublayer_end - sublayer_start + 1
 
         if self.shard_config.is_last:
@@ -156,7 +159,7 @@ class DeiTModelShard(TransformerShard):
         """Compute shard layers."""
         if self.shard_config.is_first:
             data = self.embeddings(data)
-        for layer in self.model_layers:
+        for layer in self.layers:
             data = layer(data)
         if self.shard_config.is_last:
             data = self.layernorm(data)
@@ -182,7 +185,7 @@ class DeiTModelShard(TransformerShard):
         np.savez(model_file, **weights)
 
 
-class DeiTShardForImageClassification(TransformerShard):
+class DeiTShardForImageClassification(ModuleShard):
     """Module shard based on `DeiTForImageClassification`."""
 
     def __init__(self, config: DeiTConfig, shard_config: ModuleShardConfig,

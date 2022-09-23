@@ -13,7 +13,7 @@ from transformers.models.vit.modeling_vit import (
     ViTEmbeddings, ViTIntermediate, ViTOutput, ViTSelfAttention, ViTSelfOutput
 )
 from .. import ModuleShard, ModuleShardConfig
-from . import TransformerShard, TransformerShardData
+from . import TransformerShardData
 
 
 logger = logging.getLogger(__name__)
@@ -70,13 +70,16 @@ class ViTLayerShard(ModuleShard):
         return data
 
 
-class ViTModelShard(TransformerShard):
+class ViTModelShard(ModuleShard):
     """Module shard based on `ViTModel` (no pooling layer)."""
 
     def __init__(self, config: ViTConfig, shard_config: ModuleShardConfig,
                  model_weights: Union[str, Mapping]):
         super().__init__(config, shard_config)
         self.embeddings = None
+        # ViTModel uses an encoder here, but we'll just add the layers here instead.
+        # Since we just do inference, a ViTEncoderShard class wouldn't provide real benefit.
+        self.layers = nn.ModuleList()
         self.layernorm = None
 
         logger.debug(">>>> Model name: %s", self.config.name_or_path)
@@ -106,7 +109,7 @@ class ViTModelShard(TransformerShard):
             layer_config = ModuleShardConfig(layer_start=sublayer_start, layer_end=sublayer_end)
             layer = ViTLayerShard(self.config, layer_config)
             self._load_weights_layer(weights, layer_id, layer)
-            self.model_layers.append(layer)
+            self.layers.append(layer)
             layer_curr += sublayer_end - sublayer_start + 1
 
         if self.shard_config.is_last:
@@ -159,7 +162,7 @@ class ViTModelShard(TransformerShard):
         """Compute shard layers."""
         if self.shard_config.is_first:
             data = self.embeddings(data)
-        for layer in self.model_layers:
+        for layer in self.layers:
             data = layer(data)
         if self.shard_config.is_last:
             data = self.layernorm(data)
@@ -182,7 +185,7 @@ class ViTModelShard(TransformerShard):
                     os.fsync(file.fileno())
 
 
-class ViTShardForImageClassification(TransformerShard):
+class ViTShardForImageClassification(ModuleShard):
     """Module shard based on `ViTForImageClassification`."""
 
     def __init__(self, config: ViTConfig, shard_config: ModuleShardConfig,
