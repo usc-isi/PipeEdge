@@ -120,3 +120,33 @@ Point `runtime.py` to the YAML files using the options `-sm/--sched-models-file`
 The runtime passes these through to the previously compiled scheduler application, along with other configurations like the model name and microbatch size.
 Then map the hosts specified in the third YAML file to the distributed ranks in your runtime using the `-H/--hosts` option.
 Do not specify the `-pt/--partition` option, which is for manually specifying the schedule and takes precedence over automated scheduling.
+
+
+## Datasets
+
+### GLUE CoLA
+
+Supported by the following models:
+
+* textattack/bert-base-uncased-CoLA
+
+The dataset will be automatically downloaded from [huggingface.co](https://huggingface.co/datasets/glue).
+
+Use in `runtime.py` with the option(s): `--dataset-name=CoLA`
+
+### ImageNet
+
+Supported by the following models:
+
+* google/vit-base-patch16-224
+* google/vit-large-patch16-224
+* facebook/deit-base-distilled-patch16-224
+* facebook/deit-small-distilled-patch16-224
+* facebook/deit-tiny-distilled-patch16-224
+
+This dataset cannot be downloaded automatically because a login is required to access the files.
+Register with [image-net.org](https://www.image-net.org/), then [download](https://image-net.org/challenges/LSVRC/2012/2012-downloads.php) `ILSVRC2012_devkit_t12.tar.gz` and at least one of `ILSVRC2012_img_train.tar` and `ILSVRC2012_img_val.tar`.
+Place the files in their own directory.
+The archives will be automatically parsed and extracted into a usable folder structure within the same directory.
+
+Use in `runtime.py` with the option(s): `--dataset-name=ImageNet --dataset-root=/path/to/archive_dir`
