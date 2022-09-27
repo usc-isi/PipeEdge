@@ -150,3 +150,20 @@ Place the files in their own directory.
 The archives will be automatically parsed and extracted into a usable folder structure within the same directory.
 
 Use in `runtime.py` with the option(s): `--dataset-name=ImageNet --dataset-root=/path/to/archive_dir`
+
+
+## Citation
+
+If using this software for scientific research or publications, please cite as:
+
+Yang Hu, Connor Imes, Xuanang Zhao, Souvik Kundu, Peter A. Beerel, Stephen P. Crago, John Paul Walters, "PipeEdge: Pipeline Parallelism for Large-Scale Model Inference on Heterogeneous Edge Devices," 2022 25th Euromicro Conference on Digital System Design (DSD), 2022, pp. 298-307, doi: [10.1109/DSD57027.2022.00048](https://doi.org/10.1109/DSD57027.2022.00048).
+
+```BibTex
+@INPROCEEDINGS{PipeEdge,
+  author={Hu, Yang and Imes, Connor and Zhao, Xuanang and Kundu, Souvik and Beerel, Peter A. and Crago, Stephen P. and Walters, John Paul},
+  booktitle={2022 25th Euromicro Conference on Digital System Design (DSD)},
+  title={{PipeEdge}: Pipeline Parallelism for Large-Scale Model Inference on Heterogeneous Edge Devices},
+  year={2022},
+  pages={298-307},
+  doi={10.1109/DSD57027.2022.00048}}
+```
