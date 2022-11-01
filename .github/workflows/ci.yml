@@ -12,15 +12,14 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [ '3.7', '3.8', '3.9', '3.10' ]
+        python-version: [ '3.7', '3.8', '3.9', '3.10', '3.11' ]
     name: Python ${{ matrix.python-version }} Test
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Install Python
-        uses: actions/setup-python@v1
+        uses: actions/setup-python@v3
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
       - name: Install native dependencies
         # cmake and compiler already installed
         run: |
