@@ -7,6 +7,7 @@ Multithreading has implications, e.g., consider iterations A and B that run in s
 (2) A and B may be reported out of order, regardless if order is defined by start or end time.
 (3) The window period may expire while A or B are still in-flight or reported out of order.
 """
+from contextlib import contextmanager
 import logging
 import os
 import threading
@@ -149,6 +150,12 @@ def add_key(key: str, work_type: str='items', acc_type: str='acc') -> None:
     _locks[key] = threading.Lock()
     _work_types[key] = work_type
     _acc_types[key] = acc_type
+
+@contextmanager
+def get_locked_context(key: str) -> None:
+    """Yields the `MonitorContext` with a lock on `key` (use to synchronize retrieving metrics)."""
+    with _locks[key]:
+        yield _monitor_ctx
 
 def _iter_ctx_push(key):
     ident = threading.get_ident()
