@@ -53,34 +53,9 @@ def forward_hook_monitor(module, _inputs, outputs) -> None:
     n_layers = module.shard_config.layer_end - module.shard_config.layer_start + 1
     monitoring.iteration(MONITORING_KEY_MODEL, work=n_items, accuracy=n_layers)
 
-def forward_pre_hook_quant_decode_start(_module, _inputs) -> None:
-    """Register quantization decode start."""
-    monitoring.iteration_start(MONITORING_KEY_QUANT_DECODE)
-
-def forward_pre_hook_quant_decode_finish(module, inputs) -> None:
-    """Register quantization decode completion."""
-    # Measure work as the microbatch size, but quantization only does work if quant_bits > 0.
-    quant_bits = module.quant_bit.item()
-    assert isinstance(inputs, tuple)
-    n_items = models.get_microbatch_size(inputs[0], verify=True) if quant_bits > 0 else 0
-    monitoring.iteration(MONITORING_KEY_QUANT_DECODE, work=n_items, accuracy=quant_bits)
-
-def forward_hook_quant_encode_start(_module, _inputs, _outputs) -> None:
-    """Register quantization encode start."""
-    monitoring.iteration_start(MONITORING_KEY_QUANT_ENCODE)
-
-def forward_hook_quant_encode_finish(module, inputs, _outputs) -> None:
-    """Register quantization encode completion."""
-    # Measure work as the microbatch size, but quantization only does work if quant_bits > 0.
-    # If output tensors are encoded, they're collapsed s.t. we can't infer the microbatch size.
-    # We'll rely on the inputs instead.
-    quant_bits = module.quant_bit.item()
-    assert isinstance(inputs, tuple)
-    n_items = models.get_microbatch_size(inputs[0], verify=True) if quant_bits > 0 else 0
-    monitoring.iteration(MONITORING_KEY_QUANT_ENCODE, work=n_items, accuracy=quant_bits)
-
 def forward_hook_quant_encode(module, _input_arg, output: Union[torch.Tensor, Tuple[torch.Tensor, ...]]):
     """encode tensor in the forward hook (after each module)"""
+    monitoring.iteration_start(MONITORING_KEY_QUANT_ENCODE)
     if isinstance(output, torch.Tensor):
         output = (output,)
     assert isinstance(output, tuple)
@@ -93,16 +68,22 @@ def forward_hook_quant_encode(module, _input_arg, output: Union[torch.Tensor, Tu
             tensor = clamp(tensor, quant_bit)
         stacked_tensor = tensor_encode_outerdim(tensor, quant_bit)
         comm_tuple += stacked_tensor
+    # Measure work as the microbatch size, but quantization only does work if quant_bit > 0.
+    n_items = models.get_microbatch_size(output[0], verify=True) if quant_bit > 0 else 0
+    monitoring.iteration(MONITORING_KEY_QUANT_ENCODE, work=n_items, accuracy=quant_bit)
     return tuple(comm_tuple)
 
 def forward_pre_hook_quant_decode(_module, input_arg: Tuple[Tuple[torch.Tensor, ...]]):
     """decode tensor in the preforward hook (before each module)"""
+    monitoring.iteration_start(MONITORING_KEY_QUANT_DECODE)
     assert isinstance(input_arg, tuple)
     assert len(input_arg) == 1
     # input_tensor: len=5x for x tensors encoded as: comm_tensor, input_shape, scale_factor, shift, quant_bit
     input_tensors = input_arg[0]
     assert isinstance(input_tensors, tuple)
     assert len(input_tensors)%5 == 0
+    assert len(input_tensors) >= 5
+    quant_bit = input_tensors[4][0].item() # assume the same quantization bitwidth for all items
     forward_tensor = []
     for i in range(len(input_tensors) // 5):
         input_tensor = input_tensors[i*5:i*5+5]
@@ -112,8 +93,13 @@ def forward_pre_hook_quant_decode(_module, input_arg: Tuple[Tuple[torch.Tensor, 
     # The tuple will be unpacked when forward() is invoked, which must yield a single parameter
     if len(forward_tensor) == 1:
         # assume that the original result was a single tensor rather than a tuple w/ len=1
-        return tuple(forward_tensor)
-    return (tuple(forward_tensor),)
+        outputs = tuple(forward_tensor)
+    else:
+        outputs = (tuple(forward_tensor),)
+    # Measure work as the microbatch size, but quantization only does work if quant_bit > 0.
+    n_items = models.get_microbatch_size(outputs, verify=True) if quant_bit > 0 else 0
+    monitoring.iteration(MONITORING_KEY_QUANT_DECODE, work=n_items, accuracy=quant_bit)
+    return outputs
 
 def p2p_pre_hook_monitor(key: str) -> None:
     """Register send/recv start."""
@@ -366,13 +352,9 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
             model.register_forward_hook(devices.forward_hook_to_cpu)
             model.register_forward_hook(forward_hook_monitor)
             if stage != len(stage_ranks) - 1:
-                model.register_forward_hook(forward_hook_quant_encode_start)
                 model.register_forward_hook(forward_hook_quant_encode)
-                model.register_forward_hook(forward_hook_quant_encode_finish)
             if stage != 0:
-                model.register_forward_pre_hook(forward_pre_hook_quant_decode_start)
                 model.register_forward_pre_hook(forward_pre_hook_quant_decode)
-                model.register_forward_pre_hook(forward_pre_hook_quant_decode_finish)
             model.register_forward_pre_hook(forward_pre_hook_monitor)
             model.register_forward_pre_hook(devices.forward_pre_hook_to_device)
         # Initialize the stage context
@@ -455,12 +437,8 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
             pipeline.rpc_register_buffer('quant_bit', q_bit)
             pipeline.rpc_register_forward_hook(devices.forward_hook_to_cpu)
             pipeline.rpc_register_forward_hook(forward_hook_monitor)
-            pipeline.rpc_register_forward_hook(forward_hook_quant_encode_start, last=False)
             pipeline.rpc_register_forward_hook(forward_hook_quant_encode, last=False)
-            pipeline.rpc_register_forward_hook(forward_hook_quant_encode_finish, last=False)
-            pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode_start, first=False)
             pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode, first=False)
-            pipeline.rpc_register_forward_pre_hook(forward_pre_hook_quant_decode_finish, first=False)
             pipeline.rpc_register_forward_pre_hook(forward_pre_hook_monitor)
             pipeline.rpc_register_forward_pre_hook(devices.forward_pre_hook_to_device)
             tik_data = time.time()
