@@ -502,8 +502,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=29500,
                         help="communication port for the master node")
     # Communication options
-    parser.add_argument("-c", "--comm", type=str, default="rpc",
-                        choices=["rpc", "p2p"],
+    parser.add_argument("-c", "--comm", type=str, default="p2p", choices=["p2p", "rpc"],
                         help="the communication implementation")
     parser.add_argument("-w", "--worker-threads", default=16, type=int,
                         help="the number of worker threads for the 'rpc' communication backend")
