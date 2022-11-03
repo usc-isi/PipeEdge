@@ -17,11 +17,11 @@ from utils.threads import RWLock
 
 # Environment variables to override parameters
 ENV_CSV_FILE_MODE: str = "CSV_FILE_MODE"
-
-_PRINT_FIELDS_INSTANT = True
-_PRINT_FIELDS_WINDOW = True
-_PRINT_FIELDS_GLOBAL = True
 _CSV_FILE_MODE = 'w' # NOTE: will overwrite existing files!
+
+PRINT_FIELDS_INSTANT = True
+PRINT_FIELDS_WINDOW = True
+PRINT_FIELDS_GLOBAL = True
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ def finish() -> None:
     with _monitor_ctx_lock.lock_write():
         if _monitor_ctx is None:
             return
-        if _PRINT_FIELDS_GLOBAL:
+        if PRINT_FIELDS_GLOBAL:
             for key in _monitor_ctx.keys():
                 _log_global(key)
         _monitor_ctx.close()
@@ -203,8 +203,8 @@ def iteration(key: str, work: int=1, accuracy: Union[int, float]=0, safe: bool=T
             # tag=0 if this call was an initial "start", in which case it's not a real iteration
             tag = _monitor_ctx.get_tag(key=key)
             if tag > 0:
-                if _PRINT_FIELDS_INSTANT:
+                if PRINT_FIELDS_INSTANT:
                     _log_instant(key)
-                if _PRINT_FIELDS_WINDOW:
+                if PRINT_FIELDS_WINDOW:
                     if tag > 0 and (tag + 1) % _monitor_ctx.get_window_size(key=key) == 0:
                         _log_window(key)
