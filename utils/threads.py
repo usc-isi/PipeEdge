@@ -78,6 +78,12 @@ class ThreadSafeCounter:
             self._value += quantity
             self._cond.notify_all()
 
+    def set(self, value: int=0) -> None:
+        """Set (or reset) counter value."""
+        with self._cond:
+            self._value = value
+            self._cond.notify_all()
+
     def wait_gte(self, threshold: int) -> None:
         """Wait until counter >= threshold."""
         with self._cond:
