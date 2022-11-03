@@ -33,6 +33,13 @@ IMG_LABEL_IDX = 285
 CMD_STOP = 0
 CMD_SCHED = 1
 
+# A window period defines monitoring and configurability work intervals
+WINDOW_SIZE = 10
+ENV_WINDOW_SIZE: str = "WINDOW_SIZE"
+def get_window_size() -> int:
+    """Get the window size."""
+    return int(os.getenv(ENV_WINDOW_SIZE, str(WINDOW_SIZE)))
+
 
 MONITORING_KEY_MODEL = 'shard'
 MONITORING_KEY_OUTPUT = 'output'
@@ -308,7 +315,7 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
                      sched_models_file: Optional[str], sched_dev_types_file: Optional[str],
                      sched_dev_file: Optional[str]) -> None:
     """Run the pipeline using P2P communication."""
-    monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
+    monitoring.init(MONITORING_KEY_MODEL, get_window_size(), work_type='tensors', acc_type='layers')
     monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='correct')
     monitoring.add_key(MONITORING_KEY_QUANT_DECODE, work_type='tensors', acc_type='bits')
     monitoring.add_key(MONITORING_KEY_QUANT_ENCODE, work_type='tensors', acc_type='bits')
@@ -394,7 +401,7 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
                      sched_models_file: Optional[str], sched_dev_types_file: Optional[str],
                      sched_dev_file: Optional[str], rpc_num_worker_threads: int) -> None:
     """Run the pipeline using RPC communication."""
-    monitoring.init(MONITORING_KEY_MODEL, work_type='tensors', acc_type='layers')
+    monitoring.init(MONITORING_KEY_MODEL, get_window_size(), work_type='tensors', acc_type='layers')
     monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='confidence')
     monitoring.add_key(MONITORING_KEY_QUANT_DECODE, work_type='tensors', acc_type='bits')
     monitoring.add_key(MONITORING_KEY_QUANT_ENCODE, work_type='tensors', acc_type='bits')

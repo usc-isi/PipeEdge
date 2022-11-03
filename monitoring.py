@@ -16,13 +16,11 @@ from pipeedge.monitoring import MonitorContext, MonitorIterationContext
 from utils.threads import RWLock
 
 # Environment variables to override parameters
-ENV_WINDOW_SIZE: str = "WINDOW_SIZE"
 ENV_CSV_FILE_MODE: str = "CSV_FILE_MODE"
 
 _PRINT_FIELDS_INSTANT = True
 _PRINT_FIELDS_WINDOW = True
 _PRINT_FIELDS_GLOBAL = True
-_WINDOW_SIZE = 10
 _CSV_FILE_MODE = 'w' # NOTE: will overwrite existing files!
 
 logger = logging.getLogger(__name__)
@@ -97,14 +95,9 @@ def _log_global(key):
     logger.info("%s: Global Acc Rate: %s %s/sec",
                 key, _monitor_ctx.get_global_accuracy_rate(key=key), _acc_types[key])
 
-def get_window_size() -> int:
-    """Get the window size."""
-    return int(os.getenv(ENV_WINDOW_SIZE, str(_WINDOW_SIZE)))
-
-def init(key: str, work_type: str='items', acc_type: str='acc') -> None:
+def init(key: str, window_size: int, work_type: str='items', acc_type: str='acc') -> None:
     """Create monitoring context."""
     global _monitor_ctx # pylint: disable=global-statement,invalid-name
-    window_size = get_window_size()
     log_name = key + '.csv'
     log_mode = os.getenv(ENV_CSV_FILE_MODE, _CSV_FILE_MODE)
     with _monitor_ctx_lock.lock_write():
@@ -213,5 +206,5 @@ def iteration(key: str, work: int=1, accuracy: Union[int, float]=0, safe: bool=T
                 if _PRINT_FIELDS_INSTANT:
                     _log_instant(key)
                 if _PRINT_FIELDS_WINDOW:
-                    if tag > 0 and (tag + 1) % _WINDOW_SIZE == 0:
+                    if tag > 0 and (tag + 1) % _monitor_ctx.get_window_size(key=key) == 0:
                         _log_window(key)
