@@ -180,10 +180,6 @@ def parse_yaml_sched(sched: List[dict], hosts: Optional[List[str]]) -> \
     return stage_layers, stage_ranks
 
 
-def _get_default_quant(n_stages: int) -> List[int]:
-    return [0] * n_stages
-
-
 def get_pipeline_sched(world_size: int, hosts: Optional[List[str]],
                        partition: Optional[List[Tuple[int, int]]], quant: Optional[List[int]],
                        rank_order: Optional[List[int]], model_name: str, microbatch_size: int,
@@ -191,6 +187,8 @@ def get_pipeline_sched(world_size: int, hosts: Optional[List[str]],
                        s_dev_file: Optional[str]) -> \
     Tuple[List[Tuple[int, int]], List[int], List[int]]:
     """Get the pipeline schedule: `stage_layers`, `stage_quant`, and `stage_ranks`."""
+    def _get_default_quant(n_stages: int) -> List[int]:
+        return [0] * n_stages
     if partition:
         # User specified the stage layers
         logger.info("Scheduling: using user-defined partitioning")
@@ -249,18 +247,16 @@ def get_pipeline_sched(world_size: int, hosts: Optional[List[str]],
     return stage_layers, stage_quant, stage_ranks
 
 
-def _get_feature_extractor(model_name: str):
-    if model_name in ['facebook/deit-base-distilled-patch16-224',
-                      'facebook/deit-small-distilled-patch16-224',
-                      'facebook/deit-tiny-distilled-patch16-224']:
-        feature_extractor = DeiTFeatureExtractor.from_pretrained(model_name)
-    else:
-        feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
-    return feature_extractor
-
-
 def load_dataset(dataset_cfg: dict, model_name: str, batch_size: int, ubatch_size: int) -> Dataset:
     """Load inputs based on model."""
+    def _get_feature_extractor():
+        if model_name in ['facebook/deit-base-distilled-patch16-224',
+                          'facebook/deit-small-distilled-patch16-224',
+                          'facebook/deit-tiny-distilled-patch16-224']:
+            feature_extractor = DeiTFeatureExtractor.from_pretrained(model_name)
+        else:
+            feature_extractor = ViTFeatureExtractor.from_pretrained(model_name)
+        return feature_extractor
     dataset_name = dataset_cfg['name']
     dataset_root = dataset_cfg['root']
     dataset_split = dataset_cfg['split']
@@ -273,7 +269,7 @@ def load_dataset(dataset_cfg: dict, model_name: str, batch_size: int, ubatch_siz
         if dataset_root is None:
             dataset_root = 'ImageNet'
             logging.info("Dataset root not set, assuming: %s", dataset_root)
-        feature_extractor = _get_feature_extractor(model_name)
+        feature_extractor = _get_feature_extractor()
         dataset = data.load_dataset_imagenet(feature_extractor, dataset_root, split=dataset_split)
         dataset = data.load_dataset_subset(dataset, batch_size, shuffle=dataset_shuffle)
     elif model_name in ['bert-base-uncased', 'bert-large-uncased',
@@ -285,7 +281,7 @@ def load_dataset(dataset_cfg: dict, model_name: str, batch_size: int, ubatch_siz
         inputs = tokenizer(inputs_sentence, padding=True, truncation=True, return_tensors="pt")['input_ids']
         dataset = data.RolloverTensorDataset(batch_size, inputs, labels)
     else:
-        feature_extractor = _get_feature_extractor(model_name)
+        feature_extractor = _get_feature_extractor()
         ## random data
         # image = torch.randn(3, 384, 384)
         image = Image.open(requests.get(IMG_URL, stream=True, timeout=60).raw)
