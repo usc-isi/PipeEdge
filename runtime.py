@@ -22,7 +22,7 @@ from pipeedge.sched.scheduler import sched_pipeline
 import devices
 import model_cfg
 import monitoring
-from utils import data, threads
+from utils import controller, data, threads
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,10 @@ def get_window_size() -> int:
 
 
 ENV_SEND_CONSTRAINT: str = "SEND_CONSTRAINT"
+
+ENV_QUANT_IMPL: str = "QUANT_IMPL"
+QUANT_IMPL_HEURISTIC = "HEURISTIC"
+QUANT_IMPL_CONTROLLER = "CONTROLLER"
 
 MONITORING_KEY_MODEL = 'shard'
 MONITORING_KEY_OUTPUT = 'output'
@@ -143,6 +147,36 @@ def forward_hook_set_quant_bandwidth_heuristic(module, _inputs, outputs) -> None
             module.quant_bit = torch.tensor(4)
         else:
             module.quant_bit = torch.tensor(2)
+
+BITWIDTHS = [2, 4, 6, 8, 16, 32]
+bw_ctlr = controller.AdaptiveBitwidthPerformanceController(0, BITWIDTHS, max(BITWIDTHS))
+def forward_hook_set_quant_controller(module, _inputs, outputs) -> None:
+    """Set quantization bitwidth to to satisfy module's `rate_constraint` (requires comm=p2p)."""
+    try:
+        bw1 = module.bitwidth1.item()
+        bw2 = module.bitwidth2.item()
+        bw1_iters = module.bitwidth1_iters.item()
+    except AttributeError:
+        # only happens in the first window period, before we set all these buffers
+        bw1 = bw2 = bw1_iters = 0
+    with monitoring.get_locked_context(MONITORING_KEY_SEND) as mctx:
+        tag = mctx.get_tag(key=MONITORING_KEY_SEND)
+        window_size = mctx.get_window_size(key=MONITORING_KEY_SEND)
+        heartrate = mctx.get_window_heartrate(key=MONITORING_KEY_SEND)
+    # Only adapt at window period intervals
+    if tag > 0 and tag % window_size == 0:
+        ubatch_size = models.get_microbatch_size(outputs, verify=True)
+        send_rate = heartrate * ubatch_size
+        # set the reference value on the controller (usually doesn't change)
+        bw_ctlr.reference = module.rate_constraint.item()
+        bw1, bw2, bw1_iters = bw_ctlr(send_rate, window_size)
+        module.register_buffer('bitwidth1', torch.tensor(bw1), persistent=False)
+        module.register_buffer('bitwidth2', torch.tensor(bw2), persistent=False)
+    bitwidth = bw1 if bw1_iters > 0 else bw2
+    # max bitwidth implies no quantization (quant_bit = 0)
+    module.quant_bit = torch.tensor(bitwidth % max(BITWIDTHS))
+    module.register_buffer('bitwidth1_iters', torch.tensor(max(0, bw1_iters - 1)), persistent=False)
+
 
 def p2p_pre_hook_monitor(key: str) -> None:
     """Register send/recv start."""
@@ -396,7 +430,11 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
             model.register_forward_hook(devices.forward_hook_to_cpu)
             model.register_forward_hook(forward_hook_monitor)
             if stage != len(stage_ranks) - 1:
-                model.register_forward_hook(forward_hook_set_quant_bandwidth_heuristic)
+                quant_impl = os.getenv(ENV_QUANT_IMPL, QUANT_IMPL_HEURISTIC)
+                if quant_impl == QUANT_IMPL_CONTROLLER:
+                    model.register_forward_hook(forward_hook_set_quant_controller)
+                else:
+                    model.register_forward_hook(forward_hook_set_quant_bandwidth_heuristic)
                 model.register_forward_hook(forward_hook_quant_encode)
             if stage != 0:
                 model.register_forward_pre_hook(forward_pre_hook_quant_decode)
