@@ -218,7 +218,7 @@ class TensorRecvThread(AbstractTensorExchangeThread):
                 if self._evt_stop_thread.is_set():
                     return
                 # TODO: we're basically spinning...
-                time.sleep(0.1)
+                time.sleep(0.001)
             tensors = ()
             tensor_sizes = ()
             # pre/post hooks should only wrap tensor recv, not any unpickling work (further below)
