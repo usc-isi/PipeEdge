@@ -41,6 +41,8 @@ def get_window_size() -> int:
     return int(os.getenv(ENV_WINDOW_SIZE, str(WINDOW_SIZE)))
 
 
+ENV_SEND_CONSTRAINT: str = "SEND_CONSTRAINT"
+
 MONITORING_KEY_MODEL = 'shard'
 MONITORING_KEY_OUTPUT = 'output'
 MONITORING_KEY_QUANT_DECODE = 'quant_decode'
@@ -107,6 +109,40 @@ def forward_pre_hook_quant_decode(_module, input_arg: Tuple[Tuple[torch.Tensor, 
     n_items = models.get_microbatch_size(outputs, verify=True) if quant_bit > 0 else 0
     monitoring.iteration(MONITORING_KEY_QUANT_DECODE, work=n_items, accuracy=quant_bit)
     return outputs
+
+def forward_hook_set_quant_bandwidth_heuristic(module, _inputs, outputs) -> None:
+    """Set quantization bitwidth to satisfy module's `rate_constraint` (requires comm=p2p)."""
+    with monitoring.get_locked_context(MONITORING_KEY_SEND) as mctx:
+        tag = mctx.get_tag(key=MONITORING_KEY_SEND)
+        window_size = mctx.get_window_size(key=MONITORING_KEY_SEND)
+        bandwidth = mctx.get_window_perf(key=MONITORING_KEY_SEND)
+        send_work = mctx.get_window_work(key=MONITORING_KEY_SEND)
+    # Only adapt at window period intervals
+    if tag > 0 and tag % window_size == 0:
+        target_rate = module.rate_constraint.item()
+        if target_rate > 0:
+            ubatch_size = models.get_microbatch_size(outputs, verify=True)
+            target_time = ubatch_size * window_size / target_rate
+        else:
+            target_time = float('inf')
+        target_datasize = target_time * bandwidth
+        quant_bit = module.quant_bit.item()
+        if quant_bit > 0:
+            compress_ratio = int(send_work * (32 / quant_bit) / target_datasize) + 1
+        else:
+            compress_ratio = int(send_work / target_datasize) + 1
+        if compress_ratio <= 1:
+            module.quant_bit = torch.tensor(0)
+        elif compress_ratio <= 2:
+            module.quant_bit = torch.tensor(16)
+        elif compress_ratio <= 4:
+            module.quant_bit = torch.tensor(8)
+        elif compress_ratio <= 5:
+            module.quant_bit = torch.tensor(6)
+        elif compress_ratio <= 8:
+            module.quant_bit = torch.tensor(4)
+        else:
+            module.quant_bit = torch.tensor(2)
 
 def p2p_pre_hook_monitor(key: str) -> None:
     """Register send/recv start."""
@@ -354,9 +390,13 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
             model = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage][0],
                                                    stage_layers[stage][1], stage)
             model.register_buffer('quant_bit', torch.tensor(stage_quant[stage]), persistent=False)
+            send_constraint = float(os.getenv(ENV_SEND_CONSTRAINT, str(0)))
+            model.register_buffer('rate_constraint', torch.tensor(send_constraint),
+                                  persistent=False)
             model.register_forward_hook(devices.forward_hook_to_cpu)
             model.register_forward_hook(forward_hook_monitor)
             if stage != len(stage_ranks) - 1:
+                model.register_forward_hook(forward_hook_set_quant_bandwidth_heuristic)
                 model.register_forward_hook(forward_hook_quant_encode)
             if stage != 0:
                 model.register_forward_pre_hook(forward_pre_hook_quant_decode)
