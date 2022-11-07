@@ -98,17 +98,14 @@ def _send_tensor(tensor, dst, tag_base, fn_send=dist.send):
 
 
 def _recv_tensor(src, tag_base):
-    tensor_dtype = torch.zeros(1, dtype=torch.int)
+    tensor_dtype = torch.tensor(0, dtype=torch.int)
     dist.recv(tensor=tensor_dtype, src=src, tag=tag_base+TAG_TENSOR_DTYPE)
-    _tensor_dtype = TORCH_TYPES[int(tensor_dtype)]
-    tensor_shape_len = torch.zeros(1, dtype=torch.int)
+    tensor_shape_len = torch.tensor(0, dtype=torch.int)
     dist.recv(tensor=tensor_shape_len, src=src, tag=tag_base+TAG_TENSOR_SHAPE_LEN)
-    _tensor_shape_len = int(tensor_shape_len)
-    tensor_shape = torch.zeros(_tensor_shape_len, dtype=torch.int)
-    if _tensor_shape_len > 0:
+    tensor_shape = torch.zeros(tensor_shape_len, dtype=torch.int)
+    if tensor_shape_len > 0:
         dist.recv(tensor=tensor_shape, src=src, tag=tag_base+TAG_TENSOR_SHAPE)
-    _tensor_shape = [int(x) for x in tensor_shape] # list(map(lambda x: int(x), tensor_shape))
-    tensor = torch.zeros(_tensor_shape, dtype=_tensor_dtype)
+    tensor = torch.tensor((), dtype=TORCH_TYPES[tensor_dtype]).new_empty(tensor_shape.tolist())
     dist.recv(tensor=tensor, src=src, tag=tag_base+TAG_TENSOR)
     return tensor
 
@@ -212,7 +209,7 @@ class TensorRecvThread(AbstractTensorExchangeThread):
     def run(self):
         """Receive tensors and enqueue them."""
         while True:
-            tensor_count = torch.zeros(1, dtype=torch.int)
+            tensor_count = torch.tensor(0, dtype=torch.int)
             ircv_req = dist.irecv(tensor=tensor_count, src=self._src_rank,
                                   tag=TAG_BASE_DATA+TAG_TENSOR_COUNT)
             ircv_req_t = util.DistRequestWaitDaemon(ircv_req)
