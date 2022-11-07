@@ -433,7 +433,7 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
                 quant_impl = os.getenv(ENV_QUANT_IMPL, QUANT_IMPL_HEURISTIC)
                 if quant_impl == QUANT_IMPL_CONTROLLER:
                     model.register_forward_hook(forward_hook_set_quant_controller)
-                else:
+                elif quant_impl == QUANT_IMPL_HEURISTIC:
                     model.register_forward_hook(forward_hook_set_quant_bandwidth_heuristic)
                 model.register_forward_hook(forward_hook_quant_encode)
             if stage != 0:
