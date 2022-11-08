@@ -128,12 +128,13 @@ class DistRpcPipeline:
         self._rref_list = stage_rrefs
         self._link_pipeline(results_to, results_cb)
 
-    def rpc_register_buffer(self, name: str, tensors: List[Optional[torch.Tensor]]) -> None:
+    def rpc_register_buffer(self, name: str, tensors: List[Optional[torch.Tensor]],
+                            **kwargs: dict) -> None:
         """Add buffers to RPC modules."""
         if len(tensors) != len(self._rref_list):
             raise ValueError(f"tensors length ({len(tensors)}) doesn't match pipeline length "
                              f"({len(self._rref_list)})")
-        futs = [rref.rpc_async().mod_register_buffer(name, tensor)
+        futs = [rref.rpc_async().mod_register_buffer(name, tensor, **kwargs)
                 for rref, tensor in zip(self._rref_list, tensors)]
         torch.futures.wait_all(futs)
 
