@@ -353,7 +353,7 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
         else:
             model = model_cfg.module_shard_factory(model_name, model_file, stage_layers[stage][0],
                                                    stage_layers[stage][1], stage)
-            model.register_buffer('quant_bit', torch.tensor(stage_quant[stage]))
+            model.register_buffer('quant_bit', torch.tensor(stage_quant[stage]), persistent=False)
             model.register_forward_hook(devices.forward_hook_to_cpu)
             model.register_forward_hook(forward_hook_monitor)
             if stage != len(stage_ranks) - 1:
@@ -437,7 +437,8 @@ def run_pipeline_rpc(world_size: int, rank: int, model_name: str, model_file: Op
             # Create model shards on workers (requires distributed context to be initialized)
             pipeline = model_cfg.dist_rpc_pipeline_factory(model_name, model_file, stage_ranks,
                                                            stage_layers, data_rank, handle_results)
-            pipeline.rpc_register_buffer('quant_bit', [torch.tensor(q) for q in stage_quant])
+            pipeline.rpc_register_buffer('quant_bit', [torch.tensor(q) for q in stage_quant],
+                                         persistent=False)
             pipeline.rpc_register_forward_hook(devices.forward_hook_to_cpu)
             pipeline.rpc_register_forward_hook(forward_hook_monitor)
             pipeline.rpc_register_forward_hook(forward_hook_quant_encode, last=False)
