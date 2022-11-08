@@ -264,14 +264,14 @@ def load_dataset(dataset_cfg: dict, model_name: str, batch_size: int, ubatch_siz
     if dataset_name == 'CoLA':
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         dataset = data.load_dataset_glue(tokenizer, 'cola', dataset_split, ubatch_size)
-        dataset = data.load_dataset_subset(dataset, batch_size, shuffle=dataset_shuffle)
+        dataset = data.load_dataset_subset(dataset, max_size=batch_size, shuffle=dataset_shuffle)
     elif dataset_name == 'ImageNet':
         if dataset_root is None:
             dataset_root = 'ImageNet'
             logging.info("Dataset root not set, assuming: %s", dataset_root)
         feature_extractor = _get_feature_extractor()
         dataset = data.load_dataset_imagenet(feature_extractor, dataset_root, split=dataset_split)
-        dataset = data.load_dataset_subset(dataset, batch_size, shuffle=dataset_shuffle)
+        dataset = data.load_dataset_subset(dataset, max_size=batch_size, shuffle=dataset_shuffle)
     elif model_name in ['bert-base-uncased', 'bert-large-uncased',
                         'textattack/bert-base-uncased-CoLA']:
         with np.load("bert_input.npz") as bert_inputs:

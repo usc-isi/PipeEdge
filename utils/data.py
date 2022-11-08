@@ -1,6 +1,6 @@
 """Data utilities."""
 import random
-from typing import Callable, Sequence, Tuple, Union
+from typing import Callable, Optional, Sequence, Tuple, Union
 import torch
 from torch.utils.data import Dataset, Subset
 
@@ -35,14 +35,15 @@ class DatasetsDataset(Dataset[Tuple]):
         return len(self.dataset)
 
 
-def load_dataset_subset(dataset: Dataset, size: int, shuffle: bool=False) -> Dataset:
+def load_dataset_subset(dataset: Dataset, indices: Optional[Sequence[int]]=None,
+                        max_size: Optional[int]=None, shuffle: bool=False) -> Dataset:
     """Get a Dataset subset."""
-    if shuffle:
+    if indices is None:
         indices = list(range(len(dataset)))
+    if shuffle:
         random.shuffle(indices)
-        indices = indices[:size]
-    else:
-        indices = list(range(size))
+    if max_size is not None:
+        indices = indices[:max_size]
     return Subset(dataset, indices)
 
 
