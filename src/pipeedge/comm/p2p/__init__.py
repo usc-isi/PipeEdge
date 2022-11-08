@@ -15,11 +15,10 @@ TAG_BASE_CMD = 10
 
 # Offsets which are added to base values above
 TAG_TENSOR_COUNT = 0
-TAG_TENSOR_DTYPE = 1
-TAG_TENSOR_SHAPE_LEN = 2
-TAG_TENSOR_SHAPE = 3
-TAG_TENSOR = 4
-TAG_TENSOR_PICKLED_SIZE = 5
+TAG_TENSOR_DTYPE_SHAPELEN = 1
+TAG_TENSOR_SHAPE = 2
+TAG_TENSOR = 3
+TAG_TENSOR_PICKLED_SIZE = 4
 
 # Ordered set of torch types: https://pytorch.org/docs/stable/tensor_attributes.html
 TORCH_TYPES = [ torch.float32,
@@ -84,28 +83,29 @@ class ConditionQueue(queue.Queue):
 
 
 def _send_tensor(tensor, dst, tag_base, fn_send=dist.send):
-    # NOTE: could optimize by packing dtype and shape length into one message
-    tensor_dtype = torch.tensor(TORCH_TYPES_ENUM[tensor.dtype], dtype=torch.int)
-    tensor_shape_len = torch.tensor(len(tensor.shape), dtype=torch.int)
-    tensor_shape = torch.tensor(tensor.shape, dtype=torch.int)
+    # optimize by packing dtype and shape length into one message
+    shape_len = len(tensor.shape)
+    tensor_dtype_shapelen = torch.tensor([TORCH_TYPES_ENUM[tensor.dtype], shape_len],
+                                         dtype=torch.int)
     results = []
-    results.append(fn_send(tensor=tensor_dtype, dst=dst, tag=tag_base+TAG_TENSOR_DTYPE))
-    results.append(fn_send(tensor=tensor_shape_len, dst=dst, tag=tag_base+TAG_TENSOR_SHAPE_LEN))
-    if tensor_shape_len > 0:
+    results.append(fn_send(tensor=tensor_dtype_shapelen, dst=dst,
+                   tag=tag_base+TAG_TENSOR_DTYPE_SHAPELEN))
+    if shape_len > 0:
+        tensor_shape = torch.tensor(tensor.shape, dtype=torch.int)
         results.append(fn_send(tensor=tensor_shape, dst=dst, tag=tag_base+TAG_TENSOR_SHAPE))
     results.append(fn_send(tensor=tensor, dst=dst, tag=tag_base+TAG_TENSOR))
     return results
 
 
 def _recv_tensor(src, tag_base):
-    tensor_dtype = torch.tensor(0, dtype=torch.int)
-    dist.recv(tensor=tensor_dtype, src=src, tag=tag_base+TAG_TENSOR_DTYPE)
-    tensor_shape_len = torch.tensor(0, dtype=torch.int)
-    dist.recv(tensor=tensor_shape_len, src=src, tag=tag_base+TAG_TENSOR_SHAPE_LEN)
-    tensor_shape = torch.zeros(tensor_shape_len, dtype=torch.int)
-    if tensor_shape_len > 0:
+    tensor_dtype_shapelen = torch.zeros(2, dtype=torch.int)
+    dist.recv(tensor=tensor_dtype_shapelen, src=src, tag=tag_base+TAG_TENSOR_DTYPE_SHAPELEN)
+    dtype = TORCH_TYPES[tensor_dtype_shapelen[0]]
+    shape_len = tensor_dtype_shapelen[1]
+    tensor_shape = torch.zeros(shape_len, dtype=torch.int)
+    if shape_len > 0:
         dist.recv(tensor=tensor_shape, src=src, tag=tag_base+TAG_TENSOR_SHAPE)
-    tensor = torch.tensor((), dtype=TORCH_TYPES[tensor_dtype]).new_empty(tensor_shape.tolist())
+    tensor = torch.tensor((), dtype=dtype).new_empty(tensor_shape.tolist())
     dist.recv(tensor=tensor, src=src, tag=tag_base+TAG_TENSOR)
     return tensor
 
