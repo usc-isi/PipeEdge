@@ -38,7 +38,9 @@ class DatasetsDataset(Dataset[Tuple]):
 def load_dataset_subset(dataset: Dataset, size: int, shuffle: bool=False) -> Dataset:
     """Get a Dataset subset."""
     if shuffle:
-        indices = [random.randint(0, len(dataset)) for _ in range(size)]
+        indices = list(range(len(dataset)))
+        random.shuffle(indices)
+        indices = indices[:size]
     else:
         indices = list(range(size))
     return Subset(dataset, indices)
