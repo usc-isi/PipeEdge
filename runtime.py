@@ -260,18 +260,21 @@ def load_dataset(dataset_cfg: dict, model_name: str, batch_size: int, ubatch_siz
     dataset_name = dataset_cfg['name']
     dataset_root = dataset_cfg['root']
     dataset_split = dataset_cfg['split']
+    indices = dataset_cfg['indices']
     dataset_shuffle = dataset_cfg['shuffle']
     if dataset_name == 'CoLA':
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         dataset = data.load_dataset_glue(tokenizer, 'cola', dataset_split, ubatch_size)
-        dataset = data.load_dataset_subset(dataset, max_size=batch_size, shuffle=dataset_shuffle)
+        dataset = data.load_dataset_subset(dataset, indices=indices, max_size=batch_size,
+                                           shuffle=dataset_shuffle)
     elif dataset_name == 'ImageNet':
         if dataset_root is None:
             dataset_root = 'ImageNet'
             logging.info("Dataset root not set, assuming: %s", dataset_root)
         feature_extractor = _get_feature_extractor()
         dataset = data.load_dataset_imagenet(feature_extractor, dataset_root, split=dataset_split)
-        dataset = data.load_dataset_subset(dataset, max_size=batch_size, shuffle=dataset_shuffle)
+        dataset = data.load_dataset_subset(dataset, indices=indices, max_size=batch_size,
+                                           shuffle=dataset_shuffle)
     elif model_name in ['bert-base-uncased', 'bert-large-uncased',
                         'textattack/bert-base-uncased-CoLA']:
         with np.load("bert_input.npz") as bert_inputs:
@@ -528,6 +531,8 @@ def main() -> None:
                            "'ILSVRC2012_img_train.tar', 'ILSVRC2012_img_val.tar'")
     dset.add_argument("--dataset-split", default='train', type=str,
                       help="dataset split (depends on dataset), e.g.: train, val, validation, test")
+    dset.add_argument("--dataset-indices-file", default=None, type=str,
+                      help="PyTorch or NumPy file with precomputed dataset index sequence")
     dset.add_argument("--dataset-shuffle", type=bool, nargs='?', const=True, default=False,
                       help="dataset shuffle")
     # Scheduling options (grouped)
@@ -566,10 +571,17 @@ def main() -> None:
                              "devices <= HOSTS")
     args = parser.parse_args()
 
+    if args.dataset_indices_file is None:
+        indices = None
+    elif args.dataset_indices_file.endswith('.pt'):
+        indices = torch.load(args.dataset_indices_file)
+    else:
+        indices = np.load(args.dataset_indices_file)
     dataset_cfg = {
         'name': args.dataset_name,
         'root': args.dataset_root,
         'split': args.dataset_split,
+        'indices': indices,
         'shuffle': args.dataset_shuffle,
     }
 
