@@ -39,7 +39,18 @@ for i, t in enumerate(TORCH_TYPES):
 
 
 class DistP2pContext(DistContext):
-    """The singleton distributed P2P context manager."""
+    """
+    The singleton distributed P2P context manager.
+
+    Parameters
+    ----------
+    ipg_args : tuple
+        Arguments for ``torch.distributed.init_process_group()``.
+    ipg_kwargs : dict
+        Keyword arguments for ``torch.distributed.init_process_group()``.
+    cmd_cb : DistCmdHandler
+        Command handler callback.
+    """
 
     def __init__(self, ipg_args: tuple, ipg_kwargs: dict, cmd_cb: DistCmdHandler):
         super().__init__(ipg_args, ipg_kwargs)
@@ -339,6 +350,17 @@ class DistP2pPipelineStage:
     Otherwise, the rank specifying `results_cb` must not be in the work pipeline.
 
     Ranks that do nothing may specify `None` for all parameters.
+
+    Parameters
+    ----------
+    rank_src : Optional[int]
+        The rank to receive tensors from.
+    rank_dst : Optional[int]
+        The rank to send tensors to.
+    work_cb : Optional[Callable]
+        The worker callback - if None, received tensors are sent without modification.
+    results_cb : Optional[Callable]
+        The results callback.
     """
 
     def __init__(self, rank_src: Optional[int], rank_dst: Optional[int],
