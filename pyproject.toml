@@ -34,7 +34,7 @@ runtime = [
 [build-system]
 # py-build-cmake isn't particularly stable yet, so we'll use a specific version
 # Enforce min cmake version for CLI compatibility: https://github.com/tttapa/py-build-cmake/issues/6
-requires = ["cmake>=3.15", "py-build-cmake==0.0.12"]
+requires = ["cmake>=3.15", "py-build-cmake==0.0.15"]
 build-backend = "py_build_cmake.build"
 
 [tool.py-build-cmake.module]
