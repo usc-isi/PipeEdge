@@ -528,7 +528,7 @@ def main() -> None:
                            "'ILSVRC2012_img_train.tar', 'ILSVRC2012_img_val.tar'")
     dset.add_argument("--dataset-split", default='train', type=str,
                       help="dataset split (depends on dataset), e.g.: train, val, validation, test")
-    dset.add_argument("--dataset-shuffle", default=False, type=bool,
+    dset.add_argument("--dataset-shuffle", type=bool, nargs='?', const=True, default=False,
                       help="dataset shuffle")
     # Scheduling options (grouped)
     usched = parser.add_argument_group('User-defined scheduling')
