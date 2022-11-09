@@ -21,6 +21,11 @@ _CLAMP_FACTOR_GELU = {
     16: 21.59
 }
 
+def bitwidths_banner2019_gelu() -> torch.Tensor:
+    """Get available bitwidths."""
+    return torch.tensor(list(_CLAMP_FACTOR_GELU.keys()))
+
+
 def clamp_banner2019_gelu(tensor: torch.Tensor, bit: int) -> torch.Tensor:
     """Like `clamp_banner2019_laplace` but modified for a GeLU layer output."""
     # Special case for GeLU layer
@@ -31,6 +36,11 @@ def clamp_banner2019_gelu(tensor: torch.Tensor, bit: int) -> torch.Tensor:
     optimal_clamp_range = _CLAMP_FACTOR_GELU[bit] * dist_parameter
     result = torch.where(torch.abs(tensor)<optimal_clamp_range, tensor, optimal_clamp_range)
     return result
+
+
+def bitwidths_banner2019_laplace() -> torch.Tensor:
+    """Get available bitwidths."""
+    return torch.tensor(list(_CLAMP_FACTOR_LAPLACE.keys()))
 
 
 def clamp_banner2019_laplace(tensor: torch.Tensor, bit: int) -> torch.Tensor:
