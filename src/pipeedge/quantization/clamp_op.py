@@ -33,9 +33,8 @@ def clamp_banner2019_gelu(tensor: torch.Tensor, bit: int) -> torch.Tensor:
     # Assuming mean = 0, and ignore the influence of negtive small values
     variance = 2* torch.pow(tensor, 2).sum()/torch.numel(tensor)
     dist_parameter = torch.sqrt(0.5*variance)
-    optimal_clamp_range = _CLAMP_FACTOR_GELU[bit] * dist_parameter
-    result = torch.where(torch.abs(tensor)<optimal_clamp_range, tensor, optimal_clamp_range)
-    return result
+    alpha = _CLAMP_FACTOR_GELU[bit] * dist_parameter
+    return tensor.clamp(min=-alpha, max=alpha)
 
 
 def bitwidths_banner2019_laplace() -> torch.Tensor:
@@ -48,6 +47,5 @@ def clamp_banner2019_laplace(tensor: torch.Tensor, bit: int) -> torch.Tensor:
     # "Post training 4-bit quantization of convolutional networks for rapid-deployment"
     variance = torch.var(tensor, unbiased = False)
     dist_parameter = torch.sqrt(0.5*variance)
-    optimal_clamp_range = _CLAMP_FACTOR_LAPLACE[bit] * dist_parameter
-    result = torch.where(torch.abs(tensor)<optimal_clamp_range, tensor, optimal_clamp_range)
-    return result
+    alpha = _CLAMP_FACTOR_LAPLACE[bit] * dist_parameter
+    return tensor.clamp(min=-alpha, max=alpha)
