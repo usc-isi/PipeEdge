@@ -1,29 +1,11 @@
 """clamp functions used for clipping quantization methods"""
+from scipy.special import lambertw
 import torch
 
-_CLAMP_FACTOR_LAPLACE = {
-    2: 2.83,
-    3: 3.89,
-    4: 5.03,
-    5: 6.20,
-    6: 7.41,
-    8: 9.90,
-    16: 20.27
-}
 
-_CLAMP_FACTOR_GELU = {
-    2: 3.897,
-    3: 5.029,
-    4: 6.205,
-    5: 7.41,
-    6: 8.646,
-    8: 11.163,
-    16: 21.59
-}
-
-def bitwidths_banner2019_gelu() -> torch.Tensor:
-    """Get available bitwidths."""
-    return torch.tensor(list(_CLAMP_FACTOR_GELU.keys()))
+def _clamp_factor_gelu(bit: int) -> torch.Tensor:
+    # scipy returns a float64, but we'll overflow first if we don't force it when bit>=31
+    return lambertw(3 * torch.tensor(4, dtype=torch.float64)**(bit+1)).real
 
 
 def clamp_banner2019_gelu(tensor: torch.Tensor, bit: int) -> torch.Tensor:
@@ -33,13 +15,13 @@ def clamp_banner2019_gelu(tensor: torch.Tensor, bit: int) -> torch.Tensor:
     # Assuming mean = 0, and ignore the influence of negtive small values
     variance = 2* torch.pow(tensor, 2).sum()/torch.numel(tensor)
     dist_parameter = torch.sqrt(0.5*variance)
-    alpha = _CLAMP_FACTOR_GELU[bit] * dist_parameter
+    alpha = _clamp_factor_gelu(bit).to(tensor) * dist_parameter
     return tensor.clamp(min=-alpha, max=alpha)
 
 
-def bitwidths_banner2019_laplace() -> torch.Tensor:
-    """Get available bitwidths."""
-    return torch.tensor(list(_CLAMP_FACTOR_LAPLACE.keys()))
+def _clamp_factor_laplace(bit: int) -> torch.Tensor:
+    # scipy returns a float64, but we'll overflow first if we don't force it when bit>=32
+    return lambertw(3 * torch.tensor(4, dtype=torch.float64)**bit).real
 
 
 def clamp_banner2019_laplace(tensor: torch.Tensor, bit: int) -> torch.Tensor:
@@ -47,5 +29,5 @@ def clamp_banner2019_laplace(tensor: torch.Tensor, bit: int) -> torch.Tensor:
     # "Post training 4-bit quantization of convolutional networks for rapid-deployment"
     variance = torch.var(tensor, unbiased = False)
     dist_parameter = torch.sqrt(0.5*variance)
-    alpha = _CLAMP_FACTOR_LAPLACE[bit] * dist_parameter
+    alpha = _clamp_factor_laplace(bit).to(tensor) * dist_parameter
     return tensor.clamp(min=-alpha, max=alpha)

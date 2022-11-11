@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=1.15.0",
     "PyYAML",
     "requests",
+    "scipy",
     "timm>=0.3.2",
     "torch>=1.8.0",
     "transformers>=4.6.0",
@@ -27,7 +28,6 @@ runtime = [
     "datasets>=2.0.0",
     "Pillow",
     "psutil",
-    "scipy",
     "torchvision>=0.3.0",
 ]
 
