@@ -106,6 +106,11 @@ def _uint8_to_uint32(tensor):
     return tensor.view('uint32')
 
 
+def compression_factor(quant_bit: torch.Tensor) -> torch.Tensor:
+    """Compute the compression factor (data size improvement) for quantization bit widths > 0."""
+    return torch.div(32, quant_bit)
+
+
 def tensor_encode(input_data: torch.Tensor, quant_bit: int) -> List[torch.Tensor]:
     """
         The input to the encoder should be a torch.Tensor
