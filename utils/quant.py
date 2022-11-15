@@ -1,7 +1,41 @@
 """Quantization utilities."""
 import math
 from typing import List, Tuple
+import torch
+from pipeedge.quantization.basic_op import compression_factor
 from .controller import AdaptiveIntegralXupController
+
+
+def constrain_max_bitwidth(t_max: torch.Tensor, d_size: torch.Tensor, d_speed: torch.Tensor,
+                           bw_max: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the maximum bitwidth to satisfy a data movement time constraint.
+
+    Parameters
+    ----------
+    t_max : torch.Tensor (scalar)
+        The maximum time constraint to satisfy.
+    d_size : torch.Tensor (scalar)
+        The size of the data that must be moved.
+    d_speed : torch.Tensor (scalar)
+        The data movement speed.
+    bw_max : torch.Tensor (scalar)
+        The maximum bitwidth (usually the source data bitwidth).
+
+    Returns
+    -------
+    torch.Tensor (scalar)
+        The largest bitwidth that satisfies the time constraint, or 0 if not satisfiable.
+    """
+    bitwidths = torch.arange(bw_max, -1, -1, dtype=torch.int)
+    # Perfect packing would be: scales = bitwidths / bw_max
+    # Discretize scaling since we don't pack partial values (special handling for bitwidth=0)
+    scales = compression_factor(bitwidths[:-1]).to(dtype=torch.int).reciprocal()
+    scales = torch.hstack((scales, torch.tensor(0)))
+    # d_size = 0 -> scale = inf
+    scale = torch.div(d_speed * t_max, d_size)
+    return bitwidths[scale >= scales][0]
+
 
 class AdaptiveBitwidthPerformanceController(AdaptiveIntegralXupController):
     """
