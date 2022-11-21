@@ -22,7 +22,8 @@ from pipeedge.sched.scheduler import sched_pipeline
 import devices
 import model_cfg
 import monitoring
-from utils import data, quant, threads
+from utils import data, threads
+from utils import quant as quantutil
 
 logger = logging.getLogger(__name__)
 
@@ -164,12 +165,12 @@ def forward_hook_set_quant_bandwidth_heuristic_2(module, _inputs, outputs) -> No
         ubatch_time = ubatch_size / module.rate_constraint
         ubatch_mbits = sum(t.numel() * t.numpy().dtype.itemsize for t in tensors) * 8 / 1000000
         src_bit = torch.tensor(tensors[0].numpy().dtype.itemsize * 8)
-        quant_bit = quant.constrain_max_bitwidth(ubatch_time, ubatch_mbits, bandwidth, src_bit)
+        quant_bit = quantutil.constrain_max_bitwidth(ubatch_time, ubatch_mbits, bandwidth, src_bit)
         # enforce min bitwidth = 2; quant_bit = src_bit -> quant_bit = 0
         module.quant_bit = max(torch.tensor(2), quant_bit) % src_bit
 
 BITWIDTHS = [2, 4, 6, 8, 16, 32]
-bw_ctlr = quant.AdaptiveBitwidthPerformanceController(0, BITWIDTHS, max(BITWIDTHS))
+bw_ctlr = quantutil.AdaptiveBitwidthPerformanceController(0, BITWIDTHS, max(BITWIDTHS))
 def forward_hook_set_quant_controller(module, _inputs, outputs) -> None:
     """Set quantization bitwidth to to satisfy module's `rate_constraint` (requires comm=p2p)."""
     try:
