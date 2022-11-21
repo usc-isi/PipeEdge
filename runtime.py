@@ -45,6 +45,7 @@ ENV_SEND_CONSTRAINT: str = "SEND_CONSTRAINT"
 
 ENV_QUANT_IMPL: str = "QUANT_IMPL"
 QUANT_IMPL_HEURISTIC = "HEURISTIC"
+QUANT_IMPL_HEURISTIC2 = "HEURISTIC2"
 QUANT_IMPL_CONTROLLER = "CONTROLLER"
 
 MONITORING_KEY_MODEL = 'shard'
@@ -147,6 +148,25 @@ def forward_hook_set_quant_bandwidth_heuristic(module, _inputs, outputs) -> None
             module.quant_bit = torch.tensor(4)
         else:
             module.quant_bit = torch.tensor(2)
+
+def forward_hook_set_quant_bandwidth_heuristic_2(module, _inputs, outputs) -> None:
+    """Set quantization bitwidth to satisfy module's `rate_constraint` (requires comm=p2p)."""
+    with monitoring.get_locked_context(MONITORING_KEY_SEND) as mctx:
+        tag = mctx.get_tag(key=MONITORING_KEY_SEND)
+        window_size = mctx.get_window_size(key=MONITORING_KEY_SEND)
+        bandwidth = mctx.get_window_perf(key=MONITORING_KEY_SEND)
+    # Only adapt at window period intervals
+    if tag > 0 and tag % window_size == 0:
+        tensors = (outputs,) if isinstance(outputs, torch.Tensor) else outputs
+        assert isinstance(tensors, tuple)
+        # Rate constraint is per-item, not per-ubatch; rate = 0 -> time = inf
+        ubatch_size = models.get_microbatch_size(outputs, verify=True)
+        ubatch_time = ubatch_size / module.rate_constraint
+        ubatch_mbits = sum(t.numel() * t.numpy().dtype.itemsize for t in tensors) * 8 / 1000000
+        src_bit = torch.tensor(tensors[0].numpy().dtype.itemsize * 8)
+        quant_bit = quant.constrain_max_bitwidth(ubatch_time, ubatch_mbits, bandwidth, src_bit)
+        # enforce min bitwidth = 2; quant_bit = src_bit -> quant_bit = 0
+        module.quant_bit = max(torch.tensor(2), quant_bit) % src_bit
 
 BITWIDTHS = [2, 4, 6, 8, 16, 32]
 bw_ctlr = quant.AdaptiveBitwidthPerformanceController(0, BITWIDTHS, max(BITWIDTHS))
@@ -435,6 +455,8 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
                     model.register_forward_hook(forward_hook_set_quant_controller)
                 elif quant_impl == QUANT_IMPL_HEURISTIC:
                     model.register_forward_hook(forward_hook_set_quant_bandwidth_heuristic)
+                elif quant_impl == QUANT_IMPL_HEURISTIC2:
+                    model.register_forward_hook(forward_hook_set_quant_bandwidth_heuristic_2)
                 model.register_forward_hook(forward_hook_quant_encode)
             if stage != 0:
                 model.register_forward_pre_hook(forward_pre_hook_quant_decode)
