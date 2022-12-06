@@ -44,10 +44,10 @@ def get_window_size() -> int:
 
 ENV_SEND_CONSTRAINT: str = "SEND_CONSTRAINT"
 
-ENV_QUANT_IMPL: str = "QUANT_IMPL"
-QUANT_IMPL_HEURISTIC = "HEURISTIC"
-QUANT_IMPL_HEURISTIC2 = "HEURISTIC2"
-QUANT_IMPL_CONTROLLER = "CONTROLLER"
+ENV_ADAPTIVE_QUANT: str = "ADAPTIVE_QUANT"
+ADAPTIVE_QUANT_HEURISTIC = "HEURISTIC"
+ADAPTIVE_QUANT_HEURISTIC2 = "HEURISTIC2"
+ADAPTIVE_QUANT_CONTROLLER = "CONTROLLER"
 
 MONITORING_KEY_MODEL = 'shard'
 MONITORING_KEY_OUTPUT = 'output'
@@ -451,12 +451,12 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
             model.register_forward_hook(devices.forward_hook_to_cpu)
             model.register_forward_hook(forward_hook_monitor)
             if stage != len(stage_ranks) - 1:
-                quant_impl = os.getenv(ENV_QUANT_IMPL, QUANT_IMPL_HEURISTIC)
-                if quant_impl == QUANT_IMPL_CONTROLLER:
+                quant_impl = os.getenv(ENV_ADAPTIVE_QUANT)
+                if quant_impl == ADAPTIVE_QUANT_CONTROLLER:
                     model.register_forward_hook(forward_hook_set_quant_controller)
-                elif quant_impl == QUANT_IMPL_HEURISTIC:
+                elif quant_impl == ADAPTIVE_QUANT_HEURISTIC:
                     model.register_forward_hook(forward_hook_set_quant_bandwidth_heuristic)
-                elif quant_impl == QUANT_IMPL_HEURISTIC2:
+                elif quant_impl == ADAPTIVE_QUANT_HEURISTIC2:
                     model.register_forward_hook(forward_hook_set_quant_bandwidth_heuristic_2)
                 model.register_forward_hook(forward_hook_quant_encode)
             if stage != 0:
