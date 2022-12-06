@@ -176,7 +176,9 @@ def forward_hook_set_quant_bandwidth_heuristic_2(module, _inputs, outputs) -> No
 # Largest bitwidths in range [2, 32] with unique discrete compressions
 BITWIDTHS = [i for i in range(32, 1, -1)
              if int(compression_factor(i)) > int(compression_factor(i + 1))]
-bw_ctlr = quantutil.AdaptiveBitwidthPerformanceController(0, BITWIDTHS, max(BITWIDTHS))
+# Cannot keep controllers in a Module instance, so cache by module reference
+_MODULE_QUANT_CONTROLLERS = {}
+_MODULE_QUANT_CONTROLLERS_LOCK = threading.Lock()
 def forward_hook_set_quant_controller(module, _inputs, outputs) -> None:
     """Set quantization bitwidth to to satisfy module's `rate_constraint` (requires comm=p2p)."""
     try:
@@ -192,10 +194,17 @@ def forward_hook_set_quant_controller(module, _inputs, outputs) -> None:
         heartrate = mctx.get_window_heartrate(key=MONITORING_KEY_SEND)
     # Only adapt at window period intervals
     if tag > 0 and tag % window_size == 0:
-        ubatch_size = models.get_microbatch_size(outputs, verify=True)
-        send_rate = heartrate * ubatch_size
+        with _MODULE_QUANT_CONTROLLERS_LOCK:
+            if module not in _MODULE_QUANT_CONTROLLERS:
+                # quant_bit = 0 -> bw_start = bw_max
+                bw_start = module.quant_bit.item() or max(BITWIDTHS)
+                _MODULE_QUANT_CONTROLLERS[module] = \
+                    quantutil.AdaptiveBitwidthPerformanceController(0, BITWIDTHS, bw_start)
+        bw_ctlr = _MODULE_QUANT_CONTROLLERS[module]
         # set the reference value on the controller (usually doesn't change)
         bw_ctlr.reference = module.rate_constraint.item()
+        ubatch_size = models.get_microbatch_size(outputs, verify=True)
+        send_rate = heartrate * ubatch_size
         bw1, bw2, bw1_iters = bw_ctlr(send_rate, window_size)
         module.register_buffer('bitwidth1', torch.tensor(bw1), persistent=False)
         module.register_buffer('bitwidth2', torch.tensor(bw2), persistent=False)
