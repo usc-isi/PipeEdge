@@ -16,7 +16,9 @@ from transformers import AutoTokenizer, DeiTFeatureExtractor, ViTFeatureExtracto
 from pipeedge.comm.p2p import DistP2pContext
 from pipeedge.comm.rpc import DistRpcContext, tensorpipe_rpc_backend_options_factory
 from pipeedge import models
-from pipeedge.quantization.basic_op import tensor_encode_outerdim, tensor_decode_outerdim
+from pipeedge.quantization.basic_op import (
+    compression_factor, tensor_encode_outerdim, tensor_decode_outerdim
+)
 from pipeedge.quantization.clamp_op import clamp_banner2019_gelu, clamp_banner2019_laplace
 from pipeedge.sched.scheduler import sched_pipeline
 import devices
@@ -171,7 +173,9 @@ def forward_hook_set_quant_bandwidth_heuristic_2(module, _inputs, outputs) -> No
         module.quant_bit = max(torch.tensor(2), quant_bit) % src_bit
         logger.info("Adaptive quantization (heuristic2): bitwidth=%d", int(module.quant_bit))
 
-BITWIDTHS = [2, 4, 6, 8, 16, 32]
+# Largest bitwidths in range [2, 32] with unique discrete compressions
+BITWIDTHS = [i for i in range(32, 1, -1)
+             if int(compression_factor(i)) > int(compression_factor(i + 1))]
 bw_ctlr = quantutil.AdaptiveBitwidthPerformanceController(0, BITWIDTHS, max(BITWIDTHS))
 def forward_hook_set_quant_controller(module, _inputs, outputs) -> None:
     """Set quantization bitwidth to to satisfy module's `rate_constraint` (requires comm=p2p)."""
