@@ -149,6 +149,7 @@ def forward_hook_set_quant_bandwidth_heuristic(module, _inputs, outputs) -> None
             module.quant_bit = torch.tensor(4)
         else:
             module.quant_bit = torch.tensor(2)
+        logger.info("Adaptive quantization (heuristic): bitwidth=%d", int(module.quant_bit))
 
 def forward_hook_set_quant_bandwidth_heuristic_2(module, _inputs, outputs) -> None:
     """Set quantization bitwidth to satisfy module's `rate_constraint` (requires comm=p2p)."""
@@ -168,6 +169,7 @@ def forward_hook_set_quant_bandwidth_heuristic_2(module, _inputs, outputs) -> No
         quant_bit = quantutil.constrain_max_bitwidth(ubatch_time, ubatch_mbits, bandwidth, src_bit)
         # enforce min bitwidth = 2; quant_bit = src_bit -> quant_bit = 0
         module.quant_bit = max(torch.tensor(2), quant_bit) % src_bit
+        logger.info("Adaptive quantization (heuristic2): bitwidth=%d", int(module.quant_bit))
 
 BITWIDTHS = [2, 4, 6, 8, 16, 32]
 bw_ctlr = quantutil.AdaptiveBitwidthPerformanceController(0, BITWIDTHS, max(BITWIDTHS))
@@ -193,6 +195,8 @@ def forward_hook_set_quant_controller(module, _inputs, outputs) -> None:
         bw1, bw2, bw1_iters = bw_ctlr(send_rate, window_size)
         module.register_buffer('bitwidth1', torch.tensor(bw1), persistent=False)
         module.register_buffer('bitwidth2', torch.tensor(bw2), persistent=False)
+        logger.info("Adaptive quantization (controller): bitwidth1=%d (iters=%d), bitwidth2=%d",
+                    bw1, bw1_iters, bw2)
     bitwidth = bw1 if bw1_iters > 0 else bw2
     # max bitwidth implies no quantization (quant_bit = 0)
     module.quant_bit = torch.tensor(bitwidth % max(BITWIDTHS))
