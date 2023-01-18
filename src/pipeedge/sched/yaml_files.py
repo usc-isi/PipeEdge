@@ -30,6 +30,19 @@ def yaml_devices_load(file) -> dict:
     return _yaml_load_map(file)
 
 
+def yaml_device_neighbors_load(file) -> dict:
+    """Load a YAML device neighbors file."""
+    # device neighbors files are a map of neighbor hostnames to yaml_device_neighbors_type values.
+    return _yaml_load_map(file)
+
+
+def yaml_device_neighbors_world_load(file) -> dict:
+    """Load a YAML device neighbors world file."""
+    # device neighbors world files are a map of hostnames to a map of neighbor hostnames to
+    # yaml_device_neighbors_type values.
+    return _yaml_load_map(file)
+
+
 def yaml_save(yml, file):
     """Save a YAML file."""
     with open(file, 'w', encoding='utf-8') as yfile:
