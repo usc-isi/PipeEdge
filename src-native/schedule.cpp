@@ -25,6 +25,10 @@ static double compute_time(const vector<double> &t_comp, size_t layer_l, size_t 
   return time;
 }
 
+static size_t model_bytes_in(size_t parameters_in, size_t dtype_size, size_t batch_size) {
+  return dtype_size * parameters_in * batch_size;
+}
+
 static size_t layer_bytes_out(const vector<model_layer> &layers, size_t layer,
                               size_t dtype_size, size_t batch_size) {
   size_t num_elements = layers[layer - 1].parameters_out;
@@ -55,7 +59,12 @@ static bool is_layers_fit(const vector<reference_wrapper<const device_type>> &de
     mem_bytes_model += layers[i].mem_MB * 1024 * 1024;
   }
   /* memory for data buffers */
-  size_t dat_bytes_in = layer_l == 1 ? parameters_in : layer_bytes_out(layers, layer_l - 1, dtype_size, batch_size);
+  size_t dat_bytes_in;
+  if (layer_l == 1) {
+    dat_bytes_in = model_bytes_in(parameters_in, dtype_size, batch_size);
+  } else {
+    dat_bytes_in = layer_bytes_out(layers, layer_l - 1, dtype_size, batch_size);
+  }
   size_t dat_bytes_out = layer_bytes_out(layers, layer_r, dtype_size, batch_size);
   // Communication and processing memory buffer overheads: send/recv/queue/processing buffers
   // Temporary processing buffers not accounted for - that's a function of the model impl
