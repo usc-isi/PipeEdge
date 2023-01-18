@@ -12,7 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [ '3.7', '3.8', '3.9', '3.10', '3.11' ]
+        # 2023-01-18: no torchvision support for Python 3.11 yet:
+        # https://github.com/pytorch/vision/issues/7049
+        python-version: [ '3.7', '3.8', '3.9', '3.10' ]
     name: Python ${{ matrix.python-version }} Test
     steps:
       - uses: actions/checkout@v3
