@@ -583,7 +583,6 @@ def init_env(device: Optional[str], net_addr: str, net_port: int, net_ifname: st
     # Device
     if device is not None:
         devices.DEVICE = torch.device(device)
-    logger.info("Device: %s", devices.DEVICE)
     if devices.DEVICE is not None and devices.DEVICE.type == 'cuda':
         torch.cuda.init()
     else:
@@ -595,8 +594,6 @@ def init_env(device: Optional[str], net_addr: str, net_port: int, net_ifname: st
     # parallel_threads = 2
     # torch.set_num_threads(parallel_threads)
     # torch.set_num_interop_threads(parallel_threads)
-    logger.debug("# parallel intra nodes threads: %d", torch.get_num_threads())
-    logger.debug("# parallel inter nodes threads: %d", torch.get_num_interop_threads())
 
     # Network
     os.environ['MASTER_ADDR'] = net_addr # MASTER_ADDR
@@ -716,6 +713,9 @@ def main() -> None:
 
     tik = time.time()
     init_env(args.device, args.addr, args.port, args.socket_ifname)
+    logger.info("Device: %s", devices.DEVICE)
+    logger.debug("# parallel intra nodes threads: %d", torch.get_num_threads())
+    logger.debug("# parallel inter nodes threads: %d", torch.get_num_interop_threads())
     if args.comm == 'p2p':
         run_pipeline_p2p(args.worldsize, args.rank, args.model_name, args.model_file,
                          args.batch_size, args.ubatch_size, partition, quant, rank_order,
