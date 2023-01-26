@@ -6,8 +6,7 @@ import yaml
 import torch
 from torch.distributed import rpc
 from pipeedge.comm.rpc import DistRpcContext
-from pipeedge import sched
-from pipeedge.sched import yaml_files
+from pipeedge.sched import revauct, yaml_files
 import model_cfg
 import runtime
 
@@ -72,13 +71,11 @@ def revauct_bid_latency(model: str, ubatch_size: int, dtype: str='torch.float32'
     shards: List[Tuple[int, int]] = []
     costs: List[float] = []
     if yml_model is not None and yml_dev_type is not None and yml_dtm_profile is not None:
-        dt_mem_bytes = yml_dev_type['mem_MB'] * 1024 * 1024
-        for layer_l in range(yml_model['layers']):
-            for layer_r in range(layer_l, yml_model['layers']):
-                bytes_req = sched.mem_bytes(yml_model, layer_l, layer_r, dtype, ubatch_size)
-                if dt_mem_bytes > bytes_req:
-                    shards.append((layer_l, layer_r))
-                    costs.append(sched.computation_time(yml_dtm_profile, layer_l, layer_r))
+        bids = revauct.bid_latency(yml_model, yml_dev_type, yml_dtm_profile, ubatch_size,
+                                   dtype=dtype)
+        for bid in bids:
+            shards.append(bid[0])
+            costs.append(bid[1])
     host = _DEVICE_CFG['host']
     # yml_dev_neighbors is a dict with hostnames as keys and yaml_device_neighbors_type values
     # (yaml_device_neighbors_type a dict, currently with only a single key: 'bw_Mbps').
