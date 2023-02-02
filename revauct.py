@@ -13,8 +13,8 @@ import runtime
 Bid: Type = Tuple[List[Tuple[int, int]], List[float], Mapping[str, dict]]
 """A bid type: ([shard layer pairs], [shard costs], {neighbor: device_neighbors_type})."""
 
-Schedule: Type = Mapping[str, Tuple[int, int]]
-"""A schedule type: map hostnames to layer pairs (tuples), e.g., { "localhost": (1, 48) }."""
+Schedule: Type = List[Mapping[str, List[int]]]
+"""While not the cleanest type, this is compatible with the YAML one used in scheduler.py."""
 
 
 logger = logging.getLogger(__name__)
@@ -83,16 +83,6 @@ def revauct_bid_latency(model: str, ubatch_size: int, dtype: str='torch.float32'
     return (host, (shards, costs, yml_dev_neighbors))
 
 
-def schedule_for_latency(model_profile: dict, bids_by_host: Mapping[str, Bid]) -> Schedule:
-    """Produce a pipeline schedule using bids."""
-    # A Schedule maps hostnames to layer pairs (tuples), e.g., { "localhost": (1, 48) }
-    # This dict should be ordered by partition
-    schedule = {}
-    # TODO: Implement, and don't forget to convert layer ranges from [0, 47] to [1, 48] format.
-    #       Use sched.communication_time_bw(...) to consider communication costs.
-    return schedule
-
-
 def main() -> None:
     """Main function."""
     parser = argparse.ArgumentParser(description="Pipeline Reverse Auction Scheduler",
@@ -147,7 +137,7 @@ def main() -> None:
         if args.rank == 0:
             # We're the auctioneer (we're also a bidder, unless we skip rank=0 in the broadcast)
             # Make sure we have the profile info needed to schedule
-            model_profile = _DEVICE_CFG['yml_models'][args.model_name]
+            yml_model = _DEVICE_CFG['yml_models'][args.model_name]
             # Collect bids
             logger.debug("Broadcasting reverse auction request")
             futs = []
@@ -156,17 +146,14 @@ def main() -> None:
                                     args=(args.model_name, args.ubatch_size))
                 futs.append(fut)
             bids_in_rank_order = torch.futures.wait_all(futs)
-            bids_by_host = { b[0]: b[1] for b in bids_in_rank_order }
-            logger.debug("Received bids: %s", bids_by_host)
+            logger.debug("Received bids in rank order: %s", bids_in_rank_order)
+            bid_data_by_host = \
+                { b[0]: ({ tuple(lyrs): cost for lyrs, cost in zip(b[1][0], b[1][1]) }, b[1][2])
+                  for b in bids_in_rank_order }
+            logger.debug("Received bids by host: %s", bid_data_by_host)
             # Schedule
-            schedule = schedule_for_latency(model_profile, bids_by_host)
-            # Now print the schedule, e.g., {'foo': (1, 2), 'bar': (3, 4)} prints as:
-            # foo:
-            # - 1
-            # - 2
-            # bar:
-            # - 3
-            # - 4
+            schedule = revauct.sched_min_latencies(yml_model, args.ubatch_size, 'torch.float32',
+                                                   bid_data_by_host)
             print(yaml.safe_dump(schedule, default_flow_style=False, sort_keys=False))
 
 
