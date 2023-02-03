@@ -168,6 +168,7 @@ def _create_sched_digraphs(layer_bid_devs: Mapping[Tuple[int, int], List[_Device
                 for dev in layer_bid_devs[path[0]]:
                     # Build a weighted directed graph for each device that can start this path
                     graph = nx.DiGraph(path=path, tails=[])
+                    devices_seen = []
                     if dev == dev_src:
                         # This device is also the input data source device
                         node_id_src = None
@@ -178,8 +179,13 @@ def _create_sched_digraphs(layer_bid_devs: Mapping[Tuple[int, int], List[_Device
                         node_id_src = (((),), (dev_src,))
                         graph.add_node(node_id_src, weight=0)
                         graph.graph['root'] = node_id_src
-                    _build_tree(graph, path, 0, node_id_src, dev, [], layer_bid_devs, adj_matrix,
-                                model, ubatch_size, dtype, dev_dest)
+                        # At the time of this writing, PipeEdge requires that if dev_src is
+                        # assigned a shard, it must be first.
+                        # Since it's not first, claim it's been seen, o/w it might be assigned a
+                        # shard somewhere else in the pipeline.
+                        devices_seen.append(dev_src)
+                    _build_tree(graph, path, 0, node_id_src, dev, devices_seen, layer_bid_devs,
+                                adj_matrix, model, ubatch_size, dtype, dev_src, dev_dest)
                     graphs.append(graph)
         except nx.exception.NetworkXNoPath:
             continue #print("Cannot get there from here") # path doesn't exist for this combination
@@ -189,7 +195,8 @@ def _create_sched_digraphs(layer_bid_devs: Mapping[Tuple[int, int], List[_Device
 def _build_tree(graph: nx.DiGraph, path: List[Tuple[int, int]], path_idx: int, node_id_prev: NodeID,
                 device: _Device, devices_seen: List[_Device],
                 layer_bid_devs: Mapping[Tuple[int, int], List[_Device]], adj_matrix: np.ndarray,
-                model: _Model, ubatch_size: int, dtype: str, dev_dest: _Device) -> None:
+                model: _Model, ubatch_size: int, dtype: str, dev_src: _Device, dev_dest: _Device) \
+    -> None:
     # Add the graph node, then add a directed edge from the previous node (if there is one)
     min_layer = path[path_idx][0]
     max_layer = path[path_idx][-1]
@@ -218,13 +225,16 @@ def _build_tree(graph: nx.DiGraph, path: List[Tuple[int, int]], path_idx: int, n
         for dev in layer_bid_devs[path[path_idx + 1]]:
             if adj_matrix[device.devno][dev.devno] > 0 and dev not in devices_seen:
                 _build_tree(graph, path, path_idx + 1, node_id, dev, devices_seen, layer_bid_devs,
-                            adj_matrix, model, ubatch_size, dtype, dev_dest)
+                            adj_matrix, model, ubatch_size, dtype, dev_src, dev_dest)
         devices_seen.pop()
     else:
         # Termination: we scheduled all shards; now the output must reach the destination device.
+        # PipeEdge doesn't currently support loops in the device pipeline, except to send results
+        # back to the source device (since the source doesn't receive from any other device).
         if device == dev_dest:
             graph.graph['tails'].append(node_id)
-        elif adj_matrix[device.devno][dev_dest.devno] > 0 and dev_dest not in devices_seen:
+        elif adj_matrix[device.devno][dev_dest.devno] > 0 and \
+             (dev_dest not in devices_seen or dev_src == dev_dest):
             node_id_dest = (node_id[0] + ((),), node_id[1] + (dev_dest,))
             assert node_id_dest not in graph.nodes
             graph.add_node(node_id_dest, weight=0)
