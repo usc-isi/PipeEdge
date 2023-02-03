@@ -111,6 +111,9 @@ def main() -> None:
                         help="this rank's device type (requires matching entry in YAML file)")
     devcfg.add_argument("-H", "--host", type=str,
                         help="this device's host name (requires matching entry in YAML file)")
+    devcfg.add_argument("-D", "--data-host", type=str, default=None,
+                        help="host where inputs are loaded and outputs are processed; "
+                             "default: rank 0's host name")
     # Model options
     modcfg = parser.add_argument_group('Device configuration')
     modcfg.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224",
@@ -152,8 +155,9 @@ def main() -> None:
                   for b in bids_in_rank_order }
             logger.debug("Received bids by host: %s", bid_data_by_host)
             # Schedule
+            data_host = args.host if args.data_host is None else args.data_host
             schedule = revauct.sched_min_latencies(yml_model, args.ubatch_size, 'torch.float32',
-                                                   bid_data_by_host)
+                                                   bid_data_by_host, data_host, data_host)
             print(yaml.safe_dump(schedule, default_flow_style=False, sort_keys=False))
 
 
