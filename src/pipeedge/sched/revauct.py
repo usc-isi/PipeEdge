@@ -107,14 +107,9 @@ def sched_min_latencies(yml_model: dict, ubatch_size: int, dtype: str,
     adj_matrix = _devs_to_adj_matrix(dev_list)
     logger.debug("Adjacency matrix: %s", adj_matrix)
 
-    # Get a mapping of layer pairs to devices that support those layer pairs
-    layer_bid_devs = _layer_bids_to_devices(dev_list)
-
     # Now do the scheduling
-    graphs = _create_sched_digraphs(layer_bid_devs, model, ubatch_size, dtype, adj_matrix,
-                                    dev_src, dev_dest)
-    sched = _get_best_schedule(graphs)
-
+    sched = _schedule_best_time_overlap(model, ubatch_size, dtype, dev_src, dev_dest, dev_list,
+                                        adj_matrix)
     if len(sched[0]) == 0:
         logger.debug("No possible paths.")
     else:
@@ -127,84 +122,70 @@ def sched_min_latencies(yml_model: dict, ubatch_size: int, dtype: str,
 NodeID: Type = Tuple[Tuple[Tuple[int, int], ...], Tuple[_Device, ...]]
 """Two tuples: (1) Layer ranges up to and including this node, (2) Devices assigned to (1)."""
 
-# Takes list of devices that bid plus the model and builds a dictionary whose key, value pair is
-# the type of layer window possible and all devices that can support that window
-def _layer_bids_to_devices(dev_list: List[_Device]) -> Mapping[Tuple[int, int], List[_Device]]:
-    layer_bid_devs = {}
-    for dev in dev_list:
-        layer_bids = set(tuple(bid) for bid in dev.bids)
-        for layer_bid in layer_bids:
-            if layer_bid not in layer_bid_devs:
-                layer_bid_devs[layer_bid] = []
-            layer_bid_devs[layer_bid].append(dev)
-    return layer_bid_devs
+def _shard_lut(dev: _Device) -> Mapping[int, List[Tuple[int, int]]]:
+    """Create a lookup table of supported shards, keyed by their start layer."""
+    shards = {}
+    for bid in dev.bids:
+        if bid[0] not in shards:
+            shards[bid[0]] = []
+        shards[bid[0]].append(bid)
+    return shards
 
-# Constructs all possible graphs where nodes are assigned layer windows and devices.
-# All directed paths in a graph represent a possible layer/device schedule.
-def _create_sched_digraphs(layer_bid_devs: Mapping[Tuple[int, int], List[_Device]], model: _Model,
-                           ubatch_size: int, dtype: str, adj_matrix: np.ndarray,
-                           dev_src: _Device, dev_dest: _Device) -> List[nx.DiGraph]:
-    # Create a directed graph where each node is an allowable layer assignment.
-    path_generator_graph = nx.DiGraph()
-    path_generator_graph.add_nodes_from(layer_bid_devs.keys())
-    keys_max = [max(k) + 1 for k in layer_bid_devs]
-    keys_min = [min(k) for k in layer_bid_devs]
-    for key1, key1_max in zip(layer_bid_devs, keys_max):
-        for key2, key2_min in zip(layer_bid_devs, keys_min):
-            if key1_max == key2_min: # connect them
-                path_generator_graph.add_edge(key1, key2)
+def _schedule_best_time_overlap(model: _Model, ubatch_size: int, dtype: str, dev_src: _Device,
+                                dev_dest: _Device, devices: List[_Device], adj_matrix: np.ndarray) \
+    -> Tuple[Tuple[_Device, ...], Tuple[Tuple[int, int], ...], float]:
+    """Schedule for minimum latency (cost), accounting for computation and communication overlap."""
+    # Create the shard lookup table for each device.
+    dev_shards = { d: _shard_lut(d) for d in devices }
+    # Search for feasible schedules, keeping track of the best.
+    schedule = ((), (), float('inf'))
+    for dev, shards in dev_shards.items():
+        for shard in shards[0]:
+            graph = _build_graph(model, ubatch_size, dtype, dev_src, dev_dest, dev_shards,
+                                 adj_matrix, dev, shard)
+            for node_id_tail in graph.graph['tails']:
+                path, cost = _shortest_path_with_cost(graph, graph.graph['root'], node_id_tail)
+                if cost < schedule[2]:
+                    # The final node ID contains the complete device and layer schedule.
+                    schedule = (path[-1][1], path[-1][0], cost)
+    return schedule
 
-    # All possible paths from nodes containing the first layer to nodes containing the last layer.
-    keys_w_first_layer = [k for k in layer_bid_devs if 0 in k]
-    keys_w_last_layer = [k for k in layer_bid_devs if model.layers - 1 in k]
-    possible_paths = [nx.algorithms.all_shortest_paths(path_generator_graph, key1, key2)
-                      for key2 in keys_w_last_layer
-                      for key1 in keys_w_first_layer]
+def _build_graph(model: _Model, ubatch_size: int, dtype: str, dev_src: _Device, dev_dest: _Device,
+                 dev_shards: Mapping[_Device, Mapping[int, List[Tuple[int, int]]]],
+                 adj_matrix: np.ndarray, dev: _Device, shard: Tuple[int, int]) -> nx.DiGraph:
+    """Build a weighted directed graph, starting with the given device and shard."""
+    graph = nx.DiGraph(tails=[])
+    devices_seen = []
+    if dev == dev_src:
+        # This device is also the input data source device.
+        node_id_src = None
+    elif adj_matrix[dev_src.devno][dev.devno] > 0:
+        # This device can't receive from the input data source device, so we're done - oh well.
+        return graph
+    else:
+        node_id_src = (((),), (dev_src,))
+        graph.add_node(node_id_src, weight=0)
+        graph.graph['root'] = node_id_src
+        # PipeEdge (currently) requires that if dev_src is assigned a shard, it must be first.
+        # Since it's not first, claim it's been seen, o/w it might be assigned a shard somewhere
+        # else in the pipeline.
+        devices_seen.append(dev_src)
+    _build_tree(model, ubatch_size, dtype, dev_src, dev_dest, dev_shards, adj_matrix, graph,
+                devices_seen, node_id_src, dev, shard)
+    return graph
 
-    graphs = []
-    for possible_path in possible_paths:
-        try:
-            for path in possible_path:
-                for dev in layer_bid_devs[path[0]]:
-                    # Build a weighted directed graph for each device that can start this path
-                    graph = nx.DiGraph(path=path, tails=[])
-                    devices_seen = []
-                    if dev == dev_src:
-                        # This device is also the input data source device
-                        node_id_src = None
-                    else:
-                        # This device must be able to receive from the input data source device
-                        if adj_matrix[dev_src.devno][dev.devno] <= 0:
-                            continue
-                        node_id_src = (((),), (dev_src,))
-                        graph.add_node(node_id_src, weight=0)
-                        graph.graph['root'] = node_id_src
-                        # At the time of this writing, PipeEdge requires that if dev_src is
-                        # assigned a shard, it must be first.
-                        # Since it's not first, claim it's been seen, o/w it might be assigned a
-                        # shard somewhere else in the pipeline.
-                        devices_seen.append(dev_src)
-                    _build_tree(graph, path, 0, node_id_src, dev, devices_seen, layer_bid_devs,
-                                adj_matrix, model, ubatch_size, dtype, dev_src, dev_dest)
-                    graphs.append(graph)
-        except nx.exception.NetworkXNoPath:
-            continue #print("Cannot get there from here") # path doesn't exist for this combination
-    return graphs
-
-# Recursively builds a tree from the node passed in to all its children
-def _build_tree(graph: nx.DiGraph, path: List[Tuple[int, int]], path_idx: int, node_id_prev: NodeID,
-                device: _Device, devices_seen: List[_Device],
-                layer_bid_devs: Mapping[Tuple[int, int], List[_Device]], adj_matrix: np.ndarray,
-                model: _Model, ubatch_size: int, dtype: str, dev_src: _Device, dev_dest: _Device) \
-    -> None:
-    # Add the graph node, then add a directed edge from the previous node (if there is one)
-    min_layer = path[path_idx][0]
-    max_layer = path[path_idx][-1]
+def _build_tree(model: _Model, ubatch_size: int, dtype: str, dev_src: _Device, dev_dest: _Device,
+                dev_shards: Mapping[_Device, Mapping[int, List[Tuple[int, int]]]],
+                adj_matrix: np.ndarray, graph: nx.DiGraph, devices_seen: List[_Device],
+                node_id_prev: NodeID, device: _Device, shard: Tuple[int, int]) -> None:
+    """Recursively build the device/shard graph."""
+    min_layer = shard[0]
+    max_layer = shard[1]
     comp_time = device.bids[(min_layer, max_layer)]
     if node_id_prev is None:
-        node_id = ((path[path_idx],), (device,))
+        node_id = ((shard,), (device,))
     else:
-        node_id = (node_id_prev[0] + (path[path_idx],), node_id_prev[1] + (device,))
+        node_id = (node_id_prev[0] + (shard,), node_id_prev[1] + (device,))
     assert node_id not in graph.nodes
     graph.add_node(node_id, weight=comp_time)
     if node_id_prev is None:
@@ -218,14 +199,17 @@ def _build_tree(graph: nx.DiGraph, path: List[Tuple[int, int]], path_idx: int, n
         comm_time = communication_time_bw(adj_matrix[dev_prev.devno][device.devno], comm_bytes)
         graph.add_edge(node_id_prev, node_id, weight=comm_time)
 
-    if len(path) > path_idx + 1:
+    if max_layer < model.layers - 1:
         # Recursion: look for unseen devices that can handle the next layer(s).
         # If there aren't any or they aren't reachable, we can't form a complete pipeline - oh well.
         devices_seen.append(device)
-        for dev in layer_bid_devs[path[path_idx + 1]]:
-            if adj_matrix[device.devno][dev.devno] > 0 and dev not in devices_seen:
-                _build_tree(graph, path, path_idx + 1, node_id, dev, devices_seen, layer_bid_devs,
-                            adj_matrix, model, ubatch_size, dtype, dev_src, dev_dest)
+        for dev, shards in dev_shards.items():
+            # As we scale, it's faster to eliminate paths by checking device availability first.
+            if adj_matrix[device.devno][dev.devno] <= 0 or dev in devices_seen:
+                continue
+            for next_shard in shards[max_layer + 1]:
+                _build_tree(model, ubatch_size, dtype, dev_src, dev_dest, dev_shards, adj_matrix,
+                            graph, devices_seen, node_id, dev, next_shard)
         devices_seen.pop()
     else:
         # Termination: we scheduled all shards; now the output must reach the destination device.
@@ -243,18 +227,6 @@ def _build_tree(graph: nx.DiGraph, path: List[Tuple[int, int]], path_idx: int, n
             graph.add_edge(node_id, node_id_dest, weight=comm_time)
             graph.graph['tails'].append(node_id_dest)
         # else: We can't form a complete pipeline - oh well.
-
-def _get_best_schedule(graphs: nx.DiGraph) -> \
-    Tuple[Tuple[_Device, ...], Tuple[Tuple[int, int], ...], float]:
-    shortest_paths = [_shortest_path_with_cost(graph, graph.graph['root'], node_id_targ)
-                      for graph in graphs
-                      for node_id_targ in graph.graph['tails']]
-    best_sched = ((), (), float('inf')) # (device_tuple, layer_schedule_tuple, cost)
-    for path, cost in shortest_paths:
-        if cost < best_sched[2]:
-            # The final path entry contains the device and layer info we need
-            best_sched = (path[-1][1], path[-1][0], cost)
-    return best_sched
 
 def _shortest_path_with_cost(graph: nx.DiGraph, source: NodeID, target: NodeID) -> \
     Tuple[List[NodeID], float]:
