@@ -22,6 +22,7 @@ from pipeedge.quantization.basic_op import (
 from pipeedge.quantization.clamp_op import clamp_banner2019_gelu, clamp_banner2019_laplace
 from pipeedge.sched.scheduler import sched_pipeline
 import devices
+import lz4
 import model_cfg
 import monitoring
 from utils import data, threads
@@ -420,7 +421,7 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
                      quant: Optional[List[int]], rank_order: Optional[List[int]], data_rank: int,
                      hosts: Optional[List[str]], dataset_cfg: dict,
                      sched_models_file: Optional[str], sched_dev_types_file: Optional[str],
-                     sched_dev_file: Optional[str]) -> None:
+                     sched_dev_file: Optional[str], extras: dict) -> None:
     """Run the pipeline using P2P communication."""
     monitoring.init(MONITORING_KEY_MODEL, get_window_size(), work_type='tensors', acc_type='layers')
     monitoring.add_key(MONITORING_KEY_OUTPUT, work_type='classifications', acc_type='correct')
@@ -476,7 +477,11 @@ def run_pipeline_p2p(world_size: int, rank: int, model_name: str, model_file: Op
                 elif quant_impl == ADAPTIVE_QUANT_HEURISTIC2:
                     model.register_forward_hook(forward_hook_set_quant_bandwidth_heuristic_2)
                 model.register_forward_hook(forward_hook_quant_encode)
+                if extras['lz4-out']:
+                    model.register_forward_hook(lz4.forward_hook_lz4_compress)
             if stage != 0:
+                if extras['lz4-in']:
+                    model.register_forward_pre_hook(lz4.forward_pre_lz4_decompress)
                 model.register_forward_pre_hook(forward_pre_hook_quant_decode)
             model.register_forward_pre_hook(forward_pre_hook_monitor)
             model.register_forward_pre_hook(devices.forward_pre_hook_to_device)
@@ -685,6 +690,13 @@ def main() -> None:
                         help="devices YAML file for scheduler, e.g., devices.yml; "
                              "devices in file should satisfy set membership constraint: "
                              "devices <= HOSTS")
+    extra = parser.add_argument_group('Additional features')
+    extra.add_argument("--lz4-in", action='store_true',
+                       help="Use lz4 binary to decompress inbound tensors (comm=p2p only); "
+                            f"set the {lz4.ENV_LZ4_BINARY} env var with lz4's full path")
+    extra.add_argument("--lz4-out", action='store_true',
+                       help="Use lz4 binary to compress outbound tensors (comm=p2p only); "
+                            f"set the {lz4.ENV_LZ4_BINARY} env var with lz4's full path")
     args = parser.parse_args()
 
     if args.dataset_indices_file is None:
@@ -711,6 +723,11 @@ def main() -> None:
     rank_order = None if args.rank_order is None else [int(i) for i in args.rank_order.split(',')]
     hosts = None if args.hosts is None else args.hosts.split(',')
 
+    extras = {
+        'lz4-in': args.lz4_in,
+        'lz4-out': args.lz4_out,
+    }
+
     tik = time.time()
     init_env(args.device, args.addr, args.port, args.socket_ifname)
     logger.info("Device: %s", devices.DEVICE)
@@ -720,7 +737,7 @@ def main() -> None:
         run_pipeline_p2p(args.worldsize, args.rank, args.model_name, args.model_file,
                          args.batch_size, args.ubatch_size, partition, quant, rank_order,
                          args.data_rank, hosts, dataset_cfg, args.sched_models_file,
-                         args.sched_dev_types_file, args.sched_dev_file)
+                         args.sched_dev_types_file, args.sched_dev_file, extras)
     else:
         run_pipeline_rpc(args.worldsize, args.rank, args.model_name, args.model_file,
                          args.batch_size, args.ubatch_size, partition, quant, rank_order,
