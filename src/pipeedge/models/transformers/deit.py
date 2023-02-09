@@ -118,6 +118,7 @@ class DeiTModelShard(ModuleShard):
 
     @torch.no_grad()
     def _load_weights_first(self, weights):
+        self.embeddings.cls_token.copy_(torch.from_numpy(weights["cls_token"]))
         self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["pos_embed"])))
         self.embeddings.patch_embeddings.projection.weight.copy_(torch.from_numpy(weights["patch_embed.proj.weight"]))
         self.embeddings.patch_embeddings.projection.bias.copy_(torch.from_numpy(weights["patch_embed.proj.bias"]))

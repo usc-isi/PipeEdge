@@ -119,6 +119,7 @@ class ViTModelShard(ModuleShard):
 
     @torch.no_grad()
     def _load_weights_first(self, weights):
+        self.embeddings.cls_token.copy_(torch.from_numpy(weights["cls"]))
         self.embeddings.position_embeddings.copy_(torch.from_numpy((weights["Transformer/posembed_input/pos_embedding"])))
         conv_weight = weights["embedding/kernel"]
         # O, I, J, K = conv_weight.shape
