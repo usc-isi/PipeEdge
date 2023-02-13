@@ -140,7 +140,7 @@ def _schedule_best_time_overlap(model: _Model, ubatch_size: int, dtype: str, dev
     # Search for feasible schedules, keeping track of the best.
     schedule = ((), (), float('inf'))
     for dev, shards in dev_shards.items():
-        for shard in shards[0]:
+        for shard in shards.get(0, []):
             graph = _build_graph(model, ubatch_size, dtype, dev_src, dev_dest, dev_shards,
                                  adj_matrix, dev, shard)
             for node_id_tail in graph.graph['tails']:
@@ -207,7 +207,7 @@ def _build_tree(model: _Model, ubatch_size: int, dtype: str, dev_src: _Device, d
             # As we scale, it's faster to eliminate paths by checking device availability first.
             if adj_matrix[device.devno][dev.devno] <= 0 or dev in devices_seen:
                 continue
-            for next_shard in shards[max_layer + 1]:
+            for next_shard in shards.get(max_layer + 1, []):
                 _build_tree(model, ubatch_size, dtype, dev_src, dev_dest, dev_shards, adj_matrix,
                             graph, devices_seen, node_id, dev, next_shard)
         devices_seen.pop()
