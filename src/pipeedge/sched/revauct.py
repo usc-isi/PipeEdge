@@ -28,6 +28,28 @@ def bid_latency(yml_model: dict, yml_dev_type: dict, yml_dtm_profile: dict, ubat
                 bids.append(((layer_l, layer_r), cost))
     return bids
 
+def filter_bids_chunk(yml_model: dict, bids: Mapping[Tuple[int, int], float], chunk: int=4) -> \
+    Mapping[Tuple[int, int], float]:
+    """Filter bids for shards that are multiples of a chunk size."""
+    model_layers = yml_model['layers']
+    bids_filt = {}
+    for shard, cost in bids.items():
+        # Tail shard may be smaller than chunk if chunk size doesn't evenly divide layer count
+        if shard[0] % chunk == 0 and (shard[1] + 1 >= model_layers or (shard[1] + 1) % chunk == 0):
+            bids_filt[shard] = cost
+    return bids_filt
+
+def filter_bids_largest(bids: Mapping[Tuple[int, int], float]) -> Mapping[Tuple[int, int], float]:
+    """Filter bids by the largest shards for each start layer."""
+    shards_largest = {} # map starting layer to (shard, cost)
+    for shard, cost in bids.items():
+        if shard[0] not in shards_largest:
+            shards_largest[shard[0]] = (shard, cost)
+        # Only keep the largest shard for this starting layer
+        if shard[1] > shards_largest[shard[0]][0][0]:
+            shards_largest[shard[0]] = (shard, cost)
+    return { v[0]: v[1] for v in shards_largest.values() }
+
 
 class _Device:
     """Scheduler device representation."""
