@@ -156,8 +156,8 @@ def main() -> None:
             logger.debug("Received bids by host: %s", bid_data_by_host)
             # Schedule
             data_host = args.host if args.data_host is None else args.data_host
-            schedule = revauct.sched_min_latencies(yml_model, args.ubatch_size, 'torch.float32',
-                                                   bid_data_by_host, data_host, data_host)
+            schedule = revauct.sched_max_throughput(yml_model, args.ubatch_size, 'torch.float32',
+                                                    bid_data_by_host, data_host, data_host)
             # PipeEdge scheduling/partitioning starts layer count at 1, so shift layer IDs
             sched_compat = [{ host: [l + 1 for l in layers] for host, layers in part.items()}
                             for part in schedule]

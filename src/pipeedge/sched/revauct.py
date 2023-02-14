@@ -115,10 +115,10 @@ def _devs_to_adj_matrix(dev_list: List[_Device]) -> np.ndarray:
     return adj_matrix
 
 # Return type isn't the cleanest, but is compatible with the YAML one used in scheduler.py
-def sched_min_latencies(yml_model: dict, ubatch_size: int, dtype: str,
-                        bids: Mapping[str, DeviceBidData], host_src: str, host_dest: str) -> \
+def sched_max_throughput(yml_model: dict, ubatch_size: int, dtype: str,
+                         bids: Mapping[str, DeviceBidData], host_src: str, host_dest: str) -> \
     List[Mapping[str, List[int]]]:
-    """Schedule for minimum latency (cost), accounting for computation and communication overlap."""
+    """Schedule for maximum throughput, accounting for computation and communication overlap."""
     model = _Model(yml_model)
     logger.debug("Created model: %s", model)
 
