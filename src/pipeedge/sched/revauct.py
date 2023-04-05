@@ -50,6 +50,71 @@ def filter_bids_largest(bids: Mapping[Tuple[int, int], float]) -> Mapping[Tuple[
             shards_largest[shard[0]] = (shard, cost)
     return { v[0]: v[1] for v in shards_largest.values() }
 
+def sched_greedy_host_count(yml_model: dict, _ubatch_size: int, _dtype: str,
+                            bids: Mapping[str, DeviceBidData], host_src: str, host_dest: str) -> \
+    List[Mapping[str, List[int]]]:
+    """
+    Schedule for minimum device count: assumes full connectivity, ignores bandwidths.
+
+    First schedules the largest supported shard starting at the first layer on the source host,
+    then the largest supported shard with the last layer on the destination host.
+    Finally, schedules the remaining layers with the largest supported shards on other hosts (if
+    multiple hosts support a largest shard, choose the host with the lowest bid cost).
+    It's possible that a complete pipeline won't be found, even if one is feasible.
+
+    This approach tends to prioritize latency by reducing communication.
+    The heuristic should work well if larger devices are also faster devices.
+    """
+    # Build a simpler LUT than for bid shards.
+    max_lay_lut = { host: {} for host in bids } # { host: {start_layer: (max_end_layer, cost)}}
+    for host, hbids in bids.items():
+        for shard, cost in hbids[0].items():
+            if max_lay_lut[host].get(shard[0], (-1, -1))[0] < shard[1]:
+                max_lay_lut[host][shard[0]] = (shard[1], cost)
+    # Now try to build a schedule.
+    sched = []
+    sched_ins_off = 0
+    lay_start = 0
+    lay_end = yml_model['layers'] - 1
+    dev_scheduled = set()
+    # Greedily schedule the first layer(s) on the src device.
+    if host_src in max_lay_lut and lay_start in max_lay_lut[host_src]:
+        lay_max = max_lay_lut[host_src][lay_start][0]
+        sched.append({ host_src: [lay_start, lay_max] })
+        dev_scheduled.add(host_src)
+        lay_start = lay_max + 1
+    # Greedily schedule the last layer(s) on the dest device.
+    # The src device is not allowed to be given the last layers (unless it has the whole model).
+    if host_dest in max_lay_lut and host_src != host_dest:
+        lay_min = lay_end + 1
+        for lay_s, (lay_e, _) in max_lay_lut[host_dest].items():
+            if lay_e == lay_end:
+                lay_min = min(lay_s, lay_min)
+        if lay_min <= lay_end:
+            sched.append({ host_dest: [lay_min, lay_end] })
+            dev_scheduled.add(host_dest)
+            lay_end = lay_min - 1
+            sched_ins_off = 1
+    # Greedily schedule the remaining layers.
+    while lay_start <= lay_end:
+        best = (None, -1, -1) # (device, layer_end, cost)
+        # When multiple devices have the same max shard size, pick the one with the best cost.
+        for dev in max_lay_lut:
+            if dev not in dev_scheduled and lay_start in max_lay_lut[dev]:
+                cand = max_lay_lut[dev][lay_start]
+                if cand[0] > best[1] or (cand[0] == best[1] and cand[1] < best[2]):
+                    best = (dev, cand[0], cand[1])
+        if best[0] is None:
+            # Game over, man, game over!
+            return []
+        dev, lay_max, _ = best
+        sched.insert(len(sched) - sched_ins_off, { dev: [lay_start, lay_max] })
+        dev_scheduled.add(dev)
+        lay_start = lay_max + 1
+    if host_dest not in sched[-1]:
+        sched.append({ host_dest: [] })
+    return sched
+
 
 class _Device:
     """Scheduler device representation."""
