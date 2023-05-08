@@ -1,5 +1,6 @@
 """Reverse auction scheduling."""
 import logging
+import time
 from typing import List, Mapping, Tuple, Type
 import networkx as nx
 import numpy as np
@@ -115,6 +116,250 @@ def sched_greedy_host_count(yml_model: dict, _ubatch_size: int, _dtype: str,
         sched.append({ host_dest: [] })
     return sched
 
+NodeID: Type = Tuple[str, Tuple[int, int]]
+"""Node identifier: `(device, (m, n))` for `0 <= m <= n < n_layers`"""
+
+def _bids_to_dag_dev_order(bids: Mapping[str, DeviceBidData], yml_model: dict, ubatch_size: int,
+                           dtype: str, devices: List[str], strict_order: bool) -> nx.DiGraph:
+    """
+    Build a shard bid DAG subject to a device order and connectivity.
+
+    If `strict_order=True`, edges must exactly respect the device order.
+    Otherwise, only a total order needs to be respected, i.e., edges may "skip" devices.
+    Strict ordering is more efficient to build, but may support less efficient paths.
+
+    All nodes have ID `(device, (m, n))` for `0 <= m <= n < n_layers`.
+    """
+    dag = nx.DiGraph()
+    # This LUT makes adding edges faster than naively checking all node pairs.
+    node_lut = { d: { i: [] for i in range(yml_model['layers']) } for d in devices }
+    # First add the nodes.
+    for dev in devices:
+        dev_bids = bids[dev]
+        for shard, cost in dev_bids[0].items():
+            node = (dev, shard)
+            dag.add_node(node, weight=cost)
+            node_lut[dev][shard[0]].append(node)
+    # Now add the edges.
+    comm_bytes = [ubatch_bytes(yml_model['parameters_out'][l], ubatch_size, dtype=dtype)
+                  for l in range(yml_model['layers'])]
+    for idx, node1_dev in enumerate(devices[:-1]):
+        # Strict order limits search to only the next device, o/w search all following devices.
+        node2_devs = devices[idx + 1: idx + 2] if strict_order else devices[idx + 1:]
+        for node2_dev in node2_devs:
+            bw_mbps = min(bids[node1_dev][1].get(node2_dev, {}).get('bw_Mbps', 0),
+                          bids[node2_dev][1].get(node1_dev, {}).get('bw_Mbps', 0))
+            if bw_mbps <= 0:
+                continue
+            for node1_lay_start in node_lut[node1_dev]:
+                for node1 in node_lut[node1_dev][node1_lay_start]:
+                    node1_lay_end = node1[1][1]
+                    comm_time = communication_time_bw(bw_mbps, comm_bytes[node1_lay_end])
+                    for node2 in node_lut[node2_dev].get(node1_lay_end + 1, []):
+                        dag.add_edge(node1, node2, weight=comm_time)
+    return dag
+
+def _dag_add_dummies(dag: nx.DiGraph, yml_model: dict, ubatch_size: int, dtype: str,
+                     bids: Mapping[str, DeviceBidData], host_src: str, host_dest: str,
+                     devices: List[str], strict_first: bool, strict_last: bool) -> None:
+    """
+    Add dummy source and destination nodes and edges.
+
+    If `strict_first=True`, the source node may only connect to nodes with the first device.
+    Otherwise, some `n` head devices may be skipped but total order is still respected.
+
+    If `strict_last=True`, the destination node may only connect to nodes with the last device.
+    Otherwise, some `n` tail devices may be skipped but total order is still respected.
+
+    A dummy source node has ID `(host_src, (-1, -1))`.
+    A dummy destination node has ID `(host_dest, (n_layers, n_layers))`.
+    All other nodes should have ID `(device, (m, n))` for `0 <= m <= n < n_layers`.
+    """
+    n_layers = yml_model['layers']
+    # Add dummy source and destination nodes.
+    node_src = (host_src, (-1, -1))
+    node_dest = (host_dest, (n_layers, n_layers))
+    dag.add_node(node_src, weight=0)
+    dag.add_node(node_dest, weight=0)
+    # Now connect them to nodes where allowed.
+    for node in dag.nodes:
+        dev = node[0]
+        lay_start = node[1][0]
+        lay_end = node[1][1]
+        if lay_start == 0 and (dev == devices[0] or not strict_first):
+            bw_mbps = min(bids[host_src][1].get(dev, {}).get('bw_Mbps', 0),
+                          bids[dev][1].get(host_src, {}).get('bw_Mbps', 0))
+            if dev == host_src:
+                dag.add_edge(node_src, node, weight=0)
+            elif bw_mbps > 0:
+                comm_bytes = ubatch_bytes(yml_model['parameters_in'], ubatch_size, dtype=dtype)
+                comm_time = communication_time_bw(bw_mbps, comm_bytes)
+                dag.add_edge(node_src, node, weight=comm_time)
+        if lay_end == n_layers - 1 and (dev == devices[-1] or not strict_last):
+            bw_mbps = min(bids[dev][1].get(host_dest, {}).get('bw_Mbps', 0),
+                          bids[host_dest][1].get(dev, {}).get('bw_Mbps', 0))
+            if dev == host_dest:
+                dag.add_edge(node, node_dest, weight=0)
+            elif bw_mbps > 0:
+                comm_bytes = ubatch_bytes(yml_model['parameters_out'][-1], ubatch_size, dtype=dtype)
+                comm_time = communication_time_bw(bw_mbps, comm_bytes)
+                dag.add_edge(node, node_dest, weight=comm_time)
+
+def _dag_ordered_dev_optimal_latency_path(dag: nx.DiGraph, source: NodeID, target: NodeID) -> \
+    Tuple[List[NodeID], float]:
+    """DAG must have an enforced device order."""
+    source_weight = dag.nodes[source]["weight"]
+    def calc_weight(src, tar, edge):
+        # Account for computation cost of the source device.
+        # This must be done here (not externally) to get the true shortest path.
+        maybe_src_weight = source_weight if src == source else 0
+        return maybe_src_weight + edge["weight"] + dag.nodes[tar]["weight"]
+    spath = nx.algorithms.shortest_path(dag, source=source, target=target, weight=calc_weight)
+    if len(spath) == 1:
+        # Source weight wasn't considered since there are no edges (calc_weight wasn't run).
+        cost = spath[0]['weight']
+    else:
+        cost = sum(calc_weight(spath[i], spath[i + 1], dag[spath[i]][spath[i + 1]])
+                   for i in range(len(spath) - 1))
+    return (spath, cost)
+
+def _dag_ordered_dev_optimal_throughput_path(dag: nx.DiGraph, source: NodeID, target: NodeID) -> \
+    Tuple[List[NodeID], float]:
+    """DAG must have an enforced device order."""
+    # An optimal path minimizes the maximum stage latency (overlapping compute and communication).
+    # The TOTAL cost at any point is the maximum stage latency seen up to that point.
+    # We basically track the best cost in parallel with the shortest path function.
+    # We assume a specific node access pattern, so this might only work with Dijkstra's algorithm.
+    best_costs = { node: float('inf') for node in dag.nodes }
+    best_costs[source] = dag.nodes[source]['weight']
+    def calc_weight(src, tar, edge):
+        s_cost = best_costs[src]
+        # Inbound communication and compute latencies are overlapped when considering throughput.
+        max_weight = max(edge['weight'], dag.nodes[tar]['weight'])
+        # Add cost if using the target node increases maximum stage latency (reduces throughput).
+        cost = max(0, max_weight - s_cost)
+        # If the total cost of using the target node improves over its best, this path may be used.
+        best_costs[tar] = min(s_cost + cost, best_costs[tar])
+        return cost
+    spath = nx.algorithms.shortest_path(dag, source=source, target=target, weight=calc_weight,
+                                        method='dijkstra')
+    if len(spath) == 1:
+        cost = spath[0]['weight']
+    else:
+        cost = sum(calc_weight(spath[i], spath[i + 1], dag[spath[i]][spath[i + 1]])
+                   for i in range(len(spath) - 1))
+    # Note: cost is the maximum stage latency, so take the inverse to compute throughput.
+    return (spath, cost)
+
+# Return type isn't the cleanest, but is compatible with the YAML one used in scheduler.py
+def _dag_path_to_sched(path: List[NodeID], host_src: str, host_dest: str) -> \
+    List[Mapping[str, List[int]]]:
+    """This only works if the DAG has dummy source and desintation vertices."""
+    if len(path) > 0:
+        assert len(path) > 2
+        if path[0][0] == path[1][0]:
+            # The source device was given the first shard, collapse the first two vertices.
+            path.pop(0)
+        else:
+            # (-1, -1) isn't a real shard, schedule should have an empty tuple instead.
+            path[0] = (host_src, ())
+        if path[-1][0] == path[-2][0]:
+            # The destination device was given the last shard, collapse the last two vertices.
+            path.pop()
+        else:
+            # (n_layers, n_layers) isn't a real shard, schedule should have an empty tuple instead.
+            path[-1] = (host_dest, ())
+    for stage, node in enumerate(path):
+        logger.debug("Stage: %d\n  Device: %s\n  Layers: %s", stage, node[0], list(node[1]))
+    return [{ node[0]: list(node[1]) } for node in path]
+
+def sched_optimal_latency_dev_order(yml_model: dict, ubatch_size: int, dtype: str,
+                                    bids: Mapping[str, DeviceBidData], host_src: str,
+                                    host_dest: str, devices: List[str], strict_order: bool=True,
+                                    strict_first: bool=True, strict_last: bool=True) -> \
+    Tuple[List[Mapping[str, List[int]]], float]:
+    """
+    Schedule for optimal latency subject to the given device order.
+
+    If `strict_order=True`, the schedule must use devices in their exact order.
+    Otherwise, only a total order is respected, i.e., schedules may "skip" devices (use `n` devices
+    where `n <= len(devices)`).
+    Strict ordering is more efficient to search, but may produce less efficient schedules.
+
+    If `strict_first=True`, the first device must be assigned the first shard.
+    Relaxing this constraint may produce a better schedule with minimal search overhead and support
+    searching a longer device total order without requiring all devices to be used.
+
+    If `strict_last=True`, the last device must be assigned the last shard.
+    Relaxing this constraint may produce a better schedule with minimal search overhead and support
+    searching a longer device total order without requiring all devices to be used.
+    """
+    t_start = time.time()
+    dag = _bids_to_dag_dev_order(bids, yml_model, ubatch_size, dtype, devices, strict_order)
+    _dag_add_dummies(dag, yml_model, ubatch_size, dtype, bids, host_src, host_dest, devices,
+                     strict_first, strict_last)
+    t_end = time.time()
+    logger.info("DAG construction time (sec): %f", t_end - t_start)
+    n_layers = yml_model['layers']
+    node_src = (host_src, (-1, -1))
+    node_dest = (host_dest, (n_layers, n_layers))
+    t_start = time.time()
+    try:
+        path, cost = _dag_ordered_dev_optimal_latency_path(dag, node_src, node_dest)
+    except nx.NetworkXNoPath:
+        path = []
+        cost = float('inf')
+    t_end = time.time()
+    logger.info("DAG search time (sec): %f", t_end - t_start)
+    if len(path) == 0:
+        logger.debug("No possible paths.")
+    else:
+        logger.debug("The pipeline runs in: %f seconds.", cost)
+    return (_dag_path_to_sched(path, host_src, host_dest), cost)
+
+def sched_optimal_throughput_dev_order(yml_model: dict, ubatch_size: int, dtype: str,
+                                       bids: Mapping[str, DeviceBidData], host_src: str,
+                                       host_dest: str, devices: List[str], strict_order: bool=True,
+                                       strict_first: bool=True, strict_last: bool=True) -> \
+    Tuple[List[Mapping[str, List[int]]], float]:
+    """
+    Schedule for optimal throughput subject to the given device order.
+
+    If `strict_order=True`, the schedule must use devices in their exact order.
+    Otherwise, only a total order is respected, i.e., schedules may "skip" devices (use `n` devices
+    where `n <= len(devices)`).
+    Strict ordering is more efficient to search, but may produce less efficient schedules.
+
+    If `strict_first=True`, the first device must be assigned the first shard.
+    Relaxing this constraint may produce a better schedule with minimal search overhead and support
+    searching a longer device total order without requiring all devices to be used.
+
+    If `strict_last=True`, the last device must be assigned the last shard.
+    Relaxing this constraint may produce a better schedule with minimal search overhead and support
+    searching a longer device total order without requiring all devices to be used.
+    """
+    t_start = time.time()
+    dag = _bids_to_dag_dev_order(bids, yml_model, ubatch_size, dtype, devices, strict_order)
+    _dag_add_dummies(dag, yml_model, ubatch_size, dtype, bids, host_src, host_dest, devices,
+                     strict_first, strict_last)
+    t_end = time.time()
+    logger.info("DAG construction time (sec): %f", t_end - t_start)
+    n_layers = yml_model['layers']
+    node_src = (host_src, (-1, -1))
+    node_dest = (host_dest, (n_layers, n_layers))
+    t_start = time.time()
+    try:
+        path, cost = _dag_ordered_dev_optimal_throughput_path(dag, node_src, node_dest)
+    except nx.NetworkXNoPath:
+        path = []
+        cost = float('inf')
+    t_end = time.time()
+    logger.info("DAG search time (sec): %f", t_end - t_start)
+    if len(path) == 0:
+        logger.debug("No possible paths.")
+    else:
+        logger.debug("The pipeline throughput is: %f items/sec.", 1/cost)
+    return (_dag_path_to_sched(path, host_src, host_dest), 1/cost)
 
 class _Device:
     """Scheduler device representation."""
