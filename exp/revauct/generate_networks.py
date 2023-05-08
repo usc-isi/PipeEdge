@@ -2,19 +2,15 @@
 import argparse
 import yaml
 import numpy as np
+from scipy.stats import truncnorm
 
 HOST_PREFIX = "mb"
 
-def _rescale(arr, new_min, new_max):
-    assert new_max > new_min
-    old_min = min(arr)
-    old_max = max(arr)
-    assert old_max > old_min
-    m = (new_max - new_min) / (old_max - old_min)
-    b = new_min - m * old_min
-    return m * arr + b
+# https://stackoverflow.com/questions/36894191/how-to-get-a-normal-distribution-within-a-range-in-numpy
+def _get_truncated_normal(mean=0, stdev=1, low=0, upp=10):
+    return truncnorm((low - mean) / stdev, (upp - mean) / stdev, loc=mean, scale=stdev)
 
-def _gen_random_network(size, dev_types, bw_min, bw_max, conn_prob):
+def _gen_random_network(size, dev_types, bw_min, bw_max, bw_mean, bw_stdev, conn_prob):
     hostnames = [f'{HOST_PREFIX}-{i}' for i in range(size)]
 
     # Select device types randomly
@@ -23,8 +19,7 @@ def _gen_random_network(size, dev_types, bw_min, bw_max, conn_prob):
         devices[np.random.choice(dev_types)].append(host)
 
     # Select bandwidths randomly from normal distribution of 1000 data points
-    # TODO: This rescaling means there is always a min-bandwidth and max-bandwidth entry
-    bw_dist = _rescale(np.random.standard_normal(1000), bw_min, bw_max)
+    bw_dist = _get_truncated_normal(mean=bw_mean, stdev=bw_stdev, low=bw_min, upp=bw_max).rvs(1000)
     host_bandwidths = { host: int(np.random.choice(bw_dist)) for host in hostnames }
 
     # Now populate device neighbors
@@ -47,8 +42,11 @@ def _main():
     parser.add_argument("-p", "--permutations", type=int, default=1, help="Network permutations")
     parser.add_argument("-c", "--conn", type=float, default=1,
                         help="Connection probability in range [0, 1]")
-    parser.add_argument("-b", "--bandwidth-min", type=int, default=0, help="Minimum bandwidth")
+    # The PipeEdge paper evaluated down to 5 Mbps, so use that as the default lower bound.
+    parser.add_argument("-b", "--bandwidth-min", type=int, default=5, help="Minimum bandwidth")
     parser.add_argument("-B", "--bandwidth-max", type=int, default=1000, help="Maximum bandwidth")
+    parser.add_argument("-bm", "--bandwidth-mean", type=int, default=500, help="Mean bandwidth")
+    parser.add_argument("-bs", "--bandwidth-stdev", type=int, default=200, help="Bandwidth stdev")
     parser.add_argument("-dt", "--dev-types-file", default='device_types.yml',
                         help="Device types YAML file to use for host generation")
     args = parser.parse_args()
@@ -61,7 +59,8 @@ def _main():
     size = args.size
     for perm in range(args.permutations):
         devices, device_neighbors = _gen_random_network(size, device_types, args.bandwidth_min,
-                                                        args.bandwidth_max, args.conn)
+                                                        args.bandwidth_max, args.bandwidth_mean,
+                                                        args.bandwidth_stdev, args.conn)
         # print(yaml.safe_dump(devices, default_flow_style=None, sort_keys=False))
         # print(yaml.safe_dump(device_neighbors, default_flow_style=None, sort_keys=False))
         with open(f'devices-{size}-{perm}.yml', 'w', encoding='utf-8') as yfile:
