@@ -115,7 +115,7 @@ def main() -> None:
                         help="host where inputs are loaded and outputs are processed; "
                              "default: rank 0's host name")
     # Model options
-    modcfg = parser.add_argument_group('Device configuration')
+    modcfg = parser.add_argument_group('Model configuration')
     modcfg.add_argument("-m", "--model-name", type=str, default="google/vit-base-patch16-224",
                         choices=model_cfg.get_model_names(),
                         help="the neural network model for loading")
