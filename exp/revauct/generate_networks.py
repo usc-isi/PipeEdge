@@ -10,30 +10,28 @@ HOST_PREFIX = "mb"
 def _get_truncated_normal(mean=0, stdev=1, low=0, upp=10):
     return truncnorm((low - mean) / stdev, (upp - mean) / stdev, loc=mean, scale=stdev)
 
-def _gen_random_network(size, dev_types, bw_min, bw_max, bw_mean, bw_stdev, conn_prob):
+def _gen_random_devices(size: int, dev_types: list):
+    # First create hosts
     hostnames = [f'{HOST_PREFIX}-{i}' for i in range(size)]
-
-    # Select device types randomly
+    # Now select device types randomly
     devices = { d: [] for d in dev_types }
     for host in hostnames:
         devices[np.random.choice(dev_types)].append(host)
+    return devices
 
-    # Select bandwidths randomly from normal distribution of 1000 data points
-    bw_dist = _get_truncated_normal(mean=bw_mean, stdev=bw_stdev, low=bw_min, upp=bw_max).rvs(1000)
-    host_bandwidths = { host: int(np.random.choice(bw_dist)) for host in hostnames }
-
-    # Now populate device neighbors
+def _gen_random_network(hostnames: list, bw_dist: list, conn_prob: float):
+    assert 0 <= conn_prob <= 1
+    # Select bandwidths randomly from a distribution
+    bandwidths = np.random.choice(bw_dist, size=len(hostnames))
+    # Now populate device neighbors symmetrically
     device_neighbors = { h: {} for h in hostnames }
-    for dev, dev_neighbors in device_neighbors.items():
-        for neighbor in device_neighbors:
-            if dev == neighbor:
-                continue
-            # Neighbor reporting doesn't have to be symmetric
-            if np.random.random_sample() < conn_prob:
-                bandwidth = min(host_bandwidths[dev], host_bandwidths[neighbor])
+    for dev_idx, (dev, dev_neighbors) in enumerate(device_neighbors.items()):
+        for neighbor_idx, (neighbor, neighbor_neighbors) in enumerate(device_neighbors.items()):
+            if dev_idx < neighbor_idx and np.random.random_sample() < conn_prob:
+                bandwidth = int(min(bandwidths[dev_idx], bandwidths[neighbor_idx]))
                 dev_neighbors[neighbor] = { 'bw_Mbps': bandwidth }
-
-    return devices, device_neighbors
+                neighbor_neighbors[dev] = { 'bw_Mbps': bandwidth }
+    return device_neighbors
 
 def _main():
     parser = argparse.ArgumentParser(description="Random network generator",
@@ -58,9 +56,13 @@ def _main():
 
     size = args.size
     for perm in range(args.permutations):
-        devices, device_neighbors = _gen_random_network(size, device_types, args.bandwidth_min,
-                                                        args.bandwidth_max, args.bandwidth_mean,
-                                                        args.bandwidth_stdev, args.conn)
+        devices = _gen_random_devices(size, device_types)
+        bw_dist = _get_truncated_normal(mean=args.bandwidth_mean, stdev=args.bandwidth_stdev,
+                                        low=args.bandwidth_min, upp=args.bandwidth_max).rvs(1000)
+        hostnames = []
+        for hosts in devices.values():
+            hostnames.extend(hosts)
+        device_neighbors = _gen_random_network(hostnames, bw_dist, args.conn)
         # print(yaml.safe_dump(devices, default_flow_style=None, sort_keys=False))
         # print(yaml.safe_dump(device_neighbors, default_flow_style=None, sort_keys=False))
         with open(f'devices-{size}-{perm}.yml', 'w', encoding='utf-8') as yfile:
