@@ -118,15 +118,23 @@ def _main():
         bid_data_by_host = { h: (revauct.filter_bids_largest(b[0]), b[1])
                              for h, b in bid_data_by_host.items() }
 
+    # Shuffle device ordering and limit to specified device count.
     dev_order = []
     for devs in devices.values():
         dev_order.extend(devs)
     random.shuffle(dev_order)
     dev_order = dev_order[:args.dev_count]
+    # Enforce that source and dest hosts are first and last, if they're included at all.
+    for idx in range(len(dev_order)):
+        if dev_order[idx] == host_src:
+            dev_order[0], dev_order[idx] = dev_order[idx], dev_order[0]
+        if host_dest != host_src and dev_order[idx] == host_dest:
+            dev_order[-1], dev_order[idx] = dev_order[idx], dev_order[-1]
+    print(f"Device order: {dev_order}")
+
     strict_order = not args.no_strict_order
     strict_first = args.strict_first
     strict_last = args.strict_last
-    print(f"Device order: {dev_order}")
 
     schedule = []
     pred = -1

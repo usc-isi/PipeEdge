@@ -294,6 +294,10 @@ def sched_optimal_latency_dev_order(yml_model: dict, ubatch_size: int, dtype: st
     Relaxing this constraint may produce a better schedule with minimal search overhead and support
     searching a longer device total order without requiring all devices to be used.
     """
+    if host_src in devices:
+        assert devices[0] == host_src
+    if host_dest != host_src and host_dest in devices:
+        assert devices[-1] == host_dest
     t_start = time.time()
     dag = _bids_to_dag_dev_order(bids, yml_model, ubatch_size, dtype, devices, strict_order)
     _dag_add_dummies(dag, yml_model, ubatch_size, dtype, bids, host_src, host_dest, devices,
@@ -338,6 +342,10 @@ def sched_optimal_throughput_dev_order(yml_model: dict, ubatch_size: int, dtype:
     Relaxing this constraint may produce a better schedule with minimal search overhead and support
     searching a longer device total order without requiring all devices to be used.
     """
+    if host_src in devices:
+        assert devices[0] == host_src
+    if host_dest != host_src and host_dest in devices:
+        assert devices[-1] == host_dest
     t_start = time.time()
     dag = _bids_to_dag_dev_order(bids, yml_model, ubatch_size, dtype, devices, strict_order)
     _dag_add_dummies(dag, yml_model, ubatch_size, dtype, bids, host_src, host_dest, devices,
