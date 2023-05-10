@@ -241,8 +241,8 @@ def _dag_ordered_dev_optimal_throughput_path(dag: nx.DiGraph, source: NodeID, ta
         # If the total cost of using the target node improves over its best, this path may be used.
         best_costs[tar] = min(s_cost + cost, best_costs[tar])
         return cost
-    spath = nx.algorithms.shortest_path(dag, source=source, target=target, weight=calc_weight,
-                                        method='dijkstra')
+    # DO NOT use nx.algorithms.shortest_path - its bidirectional search won't work with calc_weight.
+    spath = nx.algorithms.dijkstra_path(dag, source=source, target=target, weight=calc_weight)
     if len(spath) == 1:
         cost = spath[0]['weight']
     else:
