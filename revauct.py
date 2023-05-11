@@ -1,6 +1,7 @@
 """Reverse auction distributed application."""
 import argparse
 import logging
+import time
 from typing import List, Mapping, Optional, Tuple, Type
 import yaml
 import torch
@@ -66,6 +67,7 @@ def _find_profiles(model: str, ubatch_size: int, dtype: str) -> \
 def revauct_bid_latency(model: str, ubatch_size: int, dtype: str='torch.float32') -> \
     Tuple[str, Bid]:
     """Respond to a reverse auction request with hostname and bid."""
+    t_start = time.time()
     logger.debug("Received reverse auction request: model=%s, ubatch_size=%d", model, ubatch_size)
     yml_model, yml_dev_type, yml_dtm_profile = _find_profiles(model, ubatch_size, dtype)
     shards: List[Tuple[int, int]] = []
@@ -80,6 +82,7 @@ def revauct_bid_latency(model: str, ubatch_size: int, dtype: str='torch.float32'
     # yml_dev_neighbors is a dict with hostnames as keys and yaml_device_neighbors_type values
     # (yaml_device_neighbors_type a dict, currently with only a single key: 'bw_Mbps').
     yml_dev_neighbors = _DEVICE_CFG['yml_dev_neighbors_world'].get(host, {})
+    logger.debug("Reverse auction bid time (ms): %f", 1000 * (time.time() - t_start))
     return (host, (shards, costs, yml_dev_neighbors))
 
 
@@ -144,11 +147,13 @@ def main() -> None:
             # Collect bids
             logger.debug("Broadcasting reverse auction request")
             futs = []
+            t_start = time.time()
             for rank in range(args.worldsize):
                 fut = rpc.rpc_async(rank, revauct_bid_latency,
                                     args=(args.model_name, args.ubatch_size))
                 futs.append(fut)
             bids_in_rank_order = torch.futures.wait_all(futs)
+            logger.debug("Reverse auction total time (ms): %f", 1000 * (time.time() - t_start))
             logger.debug("Received bids in rank order: %s", bids_in_rank_order)
             bid_data_by_host = \
                 { b[0]: ({ tuple(lyrs): cost for lyrs, cost in zip(b[1][0], b[1][1]) }, b[1][2])
