@@ -33,6 +33,7 @@ def _sim_bids(models: dict, device_types: dict, devices: dict, device_neighbors_
         for host in hosts:
             yml_dev_neighbors = device_neighbors_world[host]
             bids_in_rank_order.append((host, (shards, costs, yml_dev_neighbors)))
+        print(f"{dev_type}: number of bids: {len(shards)}")
     return bids_in_rank_order
 
 def _main():
