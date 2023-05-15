@@ -1,6 +1,7 @@
 """Reverse auction distributed application."""
 import argparse
 import logging
+import random
 import time
 from typing import List, Mapping, Optional, Tuple, Type
 import yaml
@@ -123,6 +124,23 @@ def main() -> None:
                         choices=model_cfg.get_model_names(),
                         help="the neural network model for loading")
     modcfg.add_argument("-u", "--ubatch-size", default=8, type=int, help="microbatch size")
+    # Scheduler options
+    schcfg = parser.add_argument_group('Additional scheduler options')
+    schcfg.add_argument("--filter-bids-chunk", type=int, default=1,
+                        help="filter bids by chunk size")
+    schcfg.add_argument("--filter-bids-largest", action='store_true',
+                        help="filter bids by the largest chunks")
+    schcfg.add_argument("-sch", "--scheduler", default="latency_ordered",
+                        choices=["latency_ordered", "throughput_ordered", "greedy_host_count"],
+                        help="the scheduler to use")
+    schcfg.add_argument("-d", "--dev-count", type=int, default=None,
+                        help="the number of devices to consider")
+    schcfg.add_argument("--no-strict-order", action='store_true',
+                        help="disable strict ordering (total order still respected)")
+    schcfg.add_argument("--strict-first", action='store_true',
+                        help="require first device to be used")
+    schcfg.add_argument("--strict-last", action='store_true',
+                        help="require last device to be used")
     args = parser.parse_args()
 
     # Populate device config - may contain more than just this device type and host - filter later
@@ -144,13 +162,14 @@ def main() -> None:
             # We're the auctioneer (we're also a bidder, unless we skip rank=0 in the broadcast)
             # Make sure we have the profile info needed to schedule
             yml_model = _DEVICE_CFG['yml_models'][args.model_name]
+            ubatch_size = args.ubatch_size
+            dtype = 'torch.float32'
             # Collect bids
             logger.debug("Broadcasting reverse auction request")
             futs = []
             t_start = time.time()
             for rank in range(args.worldsize):
-                fut = rpc.rpc_async(rank, revauct_bid_latency,
-                                    args=(args.model_name, args.ubatch_size))
+                fut = rpc.rpc_async(rank, revauct_bid_latency, args=(args.model_name, ubatch_size))
                 futs.append(fut)
             bids_in_rank_order = torch.futures.wait_all(futs)
             logger.debug("Reverse auction total time (ms): %f", 1000 * (time.time() - t_start))
@@ -159,14 +178,65 @@ def main() -> None:
                 { b[0]: ({ tuple(lyrs): cost for lyrs, cost in zip(b[1][0], b[1][1]) }, b[1][2])
                   for b in bids_in_rank_order }
             logger.debug("Received bids by host: %s", bid_data_by_host)
-            # Schedule
+
+            # Maybe filter bids.
+            if args.filter_bids_chunk > 1:
+                bid_data_by_host = {
+                    h: (revauct.filter_bids_chunk(yml_model, b[0], chunk=args.filter_bids_chunk),
+                        b[1])
+                    for h, b in bid_data_by_host.items()
+                }
+
+            if args.filter_bids_largest:
+                bid_data_by_host = { h: (revauct.filter_bids_largest(b[0]), b[1])
+                                     for h, b in bid_data_by_host.items() }
+
+            # Shuffle device ordering and limit to specified device count.
             data_host = args.host if args.data_host is None else args.data_host
-            schedule = revauct.sched_max_throughput(yml_model, args.ubatch_size, 'torch.float32',
-                                                    bid_data_by_host, data_host, data_host)
+            dev_order = list(bid_data_by_host.keys())
+            random.shuffle(dev_order)
+            dev_order = dev_order[:args.dev_count]
+            # Enforce that data host is first, if it's included at all.
+            for idx, _ in enumerate(dev_order):
+                if dev_order[idx] == data_host:
+                    dev_order[0], dev_order[idx] = dev_order[idx], dev_order[0]
+            logger.info("Device order: %s", dev_order)
+
+            strict_order = not args.no_strict_order
+            strict_first = args.strict_first
+            strict_last = args.strict_last
+
+            schedule = []
+            pred = -1
+            t_start = time.time()
+            if args.scheduler == 'latency_ordered':
+                schedule, pred = revauct.sched_optimal_latency_dev_order(
+                    yml_model, ubatch_size, dtype, bid_data_by_host, data_host, data_host,
+                    dev_order,
+                    strict_order=strict_order, strict_first=strict_first, strict_last=strict_last)
+                logger.info("Latency prediction (sec): %s", pred)
+            elif args.scheduler == 'throughput_ordered':
+                schedule, pred = revauct.sched_optimal_throughput_dev_order(
+                    yml_model, ubatch_size, dtype, bid_data_by_host, data_host, data_host,
+                    dev_order,
+                    strict_order=strict_order, strict_first=strict_first, strict_last=strict_last)
+                logger.info("Throughput prediction (items/sec): %s", pred)
+            elif args.scheduler == "greedy_host_count":
+                schedule = revauct.sched_greedy_host_count(yml_model, ubatch_size, dtype,
+                                                           bid_data_by_host, data_host, data_host)
+            else:
+                assert False
+            t_end = time.time()
+            logger.info("Scheduler function runtime (sec): %s", t_end - t_start)
+            logger.info("Schedule stages: %d", len(schedule))
+
             # PipeEdge scheduling/partitioning starts layer count at 1, so shift layer IDs
             sched_compat = [{ host: [l + 1 for l in layers] for host, layers in part.items()}
                             for part in schedule]
-            print(yaml.safe_dump(sched_compat, default_flow_style=None, sort_keys=False))
+
+            # Finally, print the schedule.
+            logger.info("Schedule:")
+            logger.info(yaml.safe_dump(sched_compat, default_flow_style=None, sort_keys=False))
 
 
 if __name__=="__main__":
