@@ -48,7 +48,7 @@ Install the development package, Python package dependencies, and runtime applic
 
 ```sh
 pip install -U pip
-pip install -e .[runtime]
+pip install -e '.[runtime]'
 ```
 
 Download model weight files (ViT files are from [Google Cloud](https://console.cloud.google.com/storage/browser/vit_models)):
