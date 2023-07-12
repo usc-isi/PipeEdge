@@ -154,7 +154,6 @@ cython_debug/
 # Custom
 .DS_Store
 .py-build-cmake_cache
-.pylintrc
 *.csv
 *.npz
 *.yml

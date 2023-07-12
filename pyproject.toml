@@ -33,8 +33,7 @@ runtime = [
 
 [build-system]
 # py-build-cmake isn't particularly stable yet, so we'll use a specific version
-# Enforce min cmake version for CLI compatibility: https://github.com/tttapa/py-build-cmake/issues/6
-requires = ["cmake>=3.15", "py-build-cmake==0.0.15"]
+requires = ["py-build-cmake==0.1.8"]
 build-backend = "py_build_cmake.build"
 
 [tool.py-build-cmake.module]
@@ -51,3 +50,9 @@ build_type = "RelWithDebInfo"
 source_path = "src-native"
 build_args = ["-j"]
 install_components = ["PipeEdge_Runtime"]
+
+[tool.py-build-cmake.editable]
+# See: https://tttapa.github.io/py-build-cmake/Editable-install.html
+# The "wrapper" mode doesn't work with pylint, which is the only external tool we care about
+# The "hook" and "symlink" modes work with pylint, with "hook" being the most portable
+mode = "hook"
