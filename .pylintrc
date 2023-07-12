@@ -1,0 +1,4 @@
+[MESSAGES CONTROL]
+
+[TYPECHECK]
+ignored-modules=torch
