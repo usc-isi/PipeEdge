@@ -1,20 +1,25 @@
 cmake_minimum_required(VERSION 3.8)
 
-include(GNUInstallDirs)
-
 if(DEFINED PY_BUILD_CMAKE_MODULE_NAME AND DEFINED PY_BUILD_CMAKE_PACKAGE_VERSION)
+  set(_IS_PY_BUILD_CMAKE ON)
   set(_VERSION ${PY_BUILD_CMAKE_PACKAGE_VERSION})
-  message(STATUS "Checking for py-build-cmake environment - found")
-  message(STATUS "  Using PEP 427-compatible install paths")
-  set(CMAKE_INSTALL_BINDIR "${PY_BUILD_CMAKE_MODULE_NAME}-${PY_BUILD_CMAKE_PACKAGE_VERSION}.data/scripts")
 else()
+  set(_IS_PY_BUILD_CMAKE OFF)
   set(_VERSION 0.0.0)
-  message(STATUS "Checking for py-build-cmake environment - not found")
-  message(STATUS "  Using default install paths")
 endif()
 
 project(pipeedge VERSION ${_VERSION}
                  LANGUAGES CXX)
+
+include(GNUInstallDirs)
+if(_IS_PY_BUILD_CMAKE)
+  message(STATUS "Checking for py-build-cmake environment - found")
+  message(STATUS "  Using PEP 427-compatible install paths")
+  set(CMAKE_INSTALL_BINDIR "${PY_BUILD_CMAKE_MODULE_NAME}-${PY_BUILD_CMAKE_PACKAGE_VERSION}.data/scripts")
+else()
+  message(STATUS "Checking for py-build-cmake environment - not found")
+  message(STATUS "  Using default install paths")
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
