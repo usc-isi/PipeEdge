@@ -63,3 +63,20 @@ def yaml_device_type(mem_MB: Union[int, float], bw_Mbps: Union[int, float],
         'bw_Mbps': bw_Mbps,
         'model_profiles': model_profiles,
     }
+
+def yaml_device_neighbors_type(bw_Mbps: Union[int, float]) -> dict:
+    """Create a YAML device neighbors type."""
+    assert isinstance(bw_Mbps, (int, float))
+    return {
+        'bw_Mbps': bw_Mbps,
+        # Currently only one field, but could be extended, e.g., to include latency_{ms,us}.
+    }
+
+def yaml_device_neighbors(neighbors: List[str], bws_Mbps: Union[List[int], List[float]]) -> dict:
+    """Create a YAML device neighbors."""
+    _assert_list_type(neighbors, str)
+    _assert_list_type(bws_Mbps, (int, float))
+    return {
+        neighbor: yaml_device_neighbors_type(bw_Mbps)
+            for neighbor, bw_Mbps in zip(neighbors, bws_Mbps)
+    }
