@@ -29,7 +29,15 @@ add_compile_options(-Wall -Wextra)
 find_package(yaml-cpp REQUIRED)
 
 add_executable(sched-pipeline sched-pipeline.cpp schedule.cpp)
-target_link_libraries(sched-pipeline PRIVATE yaml-cpp)
+if(TARGET yaml-cpp::yaml-cpp)
+  # yaml-cpp >= 0.8.0
+  target_link_libraries(sched-pipeline PRIVATE yaml-cpp::yaml-cpp)
+else()
+  # 0.6.0 <= yaml-cpp < 0.8.0
+  target_link_libraries(sched-pipeline PRIVATE yaml-cpp)
+  # yaml-cpp < 0.6.3 doesn't have INTERFACE_INCLUDE_DIRECTORIES set on the library target
+  target_include_directories(sched-pipeline PRIVATE ${YAML_CPP_INCLUDE_DIR})
+endif()
 
 install(TARGETS sched-pipeline
         COMPONENT PipeEdge_Runtime
