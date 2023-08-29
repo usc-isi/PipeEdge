@@ -197,10 +197,14 @@ void schedule_device_types(vector<dev_type_sched_stage> &dev_type_sched, const s
   tie(layer, S, u) = res_index;
 
   // calculate the selected nodes
+#if SCHEDULE_DEBUG
   size_t stage_num = 0;
+#endif
   while (layer > 0) {
     size_t last_l, last_u;
+#if SCHEDULE_DEBUG
     stage_num++;
+#endif
     assert(parent[layer][S][u].first >= 0);
     assert(parent[layer][S][u].second >= 0);
     tie(last_l, last_u) = parent[layer][S][u];
@@ -220,7 +224,9 @@ void schedule_device_types(vector<dev_type_sched_stage> &dev_type_sched, const s
   });
   while (layer > 0) {
     size_t last_l, last_u;
+#if SCHEDULE_DEBUG
     stage_num--;
+#endif
     assert(parent[layer][S][u].first >= 0);
     assert(parent[layer][S][u].second >= 0);
     tie(last_l, last_u) = parent[layer][S][u];
