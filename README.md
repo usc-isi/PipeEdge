@@ -167,3 +167,25 @@ Yang Hu, Connor Imes, Xuanang Zhao, Souvik Kundu, Peter A. Beerel, Stephen P. Cr
   pages={298-307},
   doi={10.1109/DSD57027.2022.00048}}
 ```
+
+Or, as appropriate:
+
+```BibTex
+@INPROCEEDINGS{QuantPipe,
+  author={Wang, Haonan and Imes, Connor and Kundu, Souvik and Beerel, Peter A. and Crago, Stephen P. and Paul Walters, John},
+  booktitle={ICASSP 2023 - 2023 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)},
+  title={{QuantPipe}: Applying Adaptive Post-Training Quantization For Distributed Transformer Pipelines In Dynamic Edge Environments},
+  year={2023},
+  pages={1-5},
+  doi={10.1109/ICASSP49357.2023.10096632}}
+```
+
+```BibTex
+@INPROCEEDINGS{PipeEdgeRevAuct,
+  author={Imes, Connor and King, David W. and Walters, John Paul},
+  booktitle={2023 Eighth International Conference on Fog and Mobile Edge Computing (FMEC)},
+  title={Distributed Edge Machine Learning Pipeline Scheduling with Reverse Auctions},
+  year={2023},
+  pages={196-203},
+  doi={10.1109/FMEC59375.2023.10306169}}
+```
