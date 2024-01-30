@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # 2023-01-18: no torchvision support for Python 3.11 yet:
-        # https://github.com/pytorch/vision/issues/7049
+        # 2023-01-30: no PyTorch support for Python 3.12 yet:
+        # https://github.com/pytorch/pytorch/issues/110436
         python-version: [ '3.7', '3.8', '3.9', '3.10', '3.11' ]
     name: Python ${{ matrix.python-version }} Test
     steps:
